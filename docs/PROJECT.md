@@ -33,8 +33,12 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
   - [x] Re-run bench with classifier inline; settle whether v0.1's p50 < 1ms target is reachable or needs relaxing
 - [x] Add the architecture's decision-cache layer in front of the inline tier (PR #10)
   - [x] Without cache, every query pays ~1ms classifier overhead. With cache, ~99% of queries pay sub-microsecond. Highest-leverage piece of v0.1 work.
-- [ ] Verify forwarder + classifier latency on Raspberry Pi 4 hardware
-  - [ ] Synthesis spike's microbench projects 500–800µs p50 on Pi 4. Needs an actual measurement before v0.1 release.
+- [x] Pi 4 latency *projection* via M1 efficiency-core simulation (PR #11)
+  - [x] Microbench under taskpolicy + multiplier-based projection from M1 P-core
+  - [x] End-to-end forwarder bench under Pi-class CPU constraints
+  - [x] Verdict: v0.1 latency targets achievable on Pi 4 (e2e +2.37ms p50 even on E-core sim)
+- [ ] Actual Pi 4 hardware verification (gates v0.1 release)
+  - [ ] When hardware is available, run `bench/bench_pi4_projection.py` + 2-forwarder e2e bench. Expected: 600µs–1.5ms p50 classifier, +2–4ms p50 e2e. Outside that range = architecture revisit.
 
 ## Completed
 
@@ -45,6 +49,7 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
 - Spike B — domain classifier on URLhaus + Tranco. K2 passes decisively: logistic regression on char n-grams catches 81.2% of held-out malicious domains at <1% FPR (heuristics 9.2%). The "AI" claim is honest, not marketing. Writeup in [`docs/spike-b-results.md`](spike-b-results.md). (PR #5)
 - Synthesis spike — classifier extracted to `sentinel_dns/classifier.py`, wired into forwarder. Inline classifier costs 145µs p50 / 629µs p99 (microbench). End-to-end forwarder + classifier adds +2.37ms p50 vs direct upstream — v0.1's p50 < 1ms target needs relaxing to <3ms; the architecture's decision-cache layer is now the highest-leverage piece of v0.1 work. Writeup in [`docs/spike-synthesis-results.md`](spike-synthesis-results.md). (PR #6)
 - Decision cache — LRU cache from qname → Decision in `sentinel_dns/cache.py`, wired into forwarder ahead of the classifier. Cache hits are ~170 ns p50 (microbench), three orders of magnitude faster than the classifier. End-to-end overhead drops from +2.37ms p50 to +0.89ms p50 vs direct upstream — inside the relaxed v0.1 target. Writeup in [`docs/decision-cache.md`](decision-cache.md). (PR #10)
+- Pi 4 projection via M1 E-core simulation — classifier ~636µs p50 under E-core hint (4.5× P-core slowdown, plausibly Pi 4-class). End-to-end forwarder + classifier + cache adds +2.37ms p50 vs direct upstream even on E-core, comfortably inside the relaxed <3ms v0.1 target. Cache makes Pi 4 viability essentially independent of classifier speed. Writeup in [`docs/pi4-projection-results.md`](pi4-projection-results.md). Real hardware verification still gates v0.1 release. (PR #11)
 
 ## Notes
 
