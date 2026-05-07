@@ -26,11 +26,15 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
   - [x] Pick a dataset and document its limitations
   - [x] Train a baseline (logistic regression on n-grams) before reaching for deep learning
   - [x] Report precision/recall on a held-out set — false positive rate is the metric that matters
-- [ ] Spike A+B synthesis: wire the n-gram classifier into the forwarder, re-bench latency
-  - [ ] Pull classifier into a reusable module (extract from `bench/spike_b.py`)
-  - [ ] Persist trained model to disk; load at forwarder startup
-  - [ ] Score every query inline; log decision but don't block yet (measurement, not enforcement)
-  - [ ] Re-run bench with classifier inline; settle whether v0.1's p50 < 1ms target is reachable or needs relaxing
+- [x] Spike A+B synthesis: wire the n-gram classifier into the forwarder, re-bench latency (PR #6)
+  - [x] Pull classifier into a reusable module (extract from `bench/spike_b.py`)
+  - [x] Persist trained model to disk; load at forwarder startup
+  - [x] Score every query inline; log decision but don't block yet (measurement, not enforcement)
+  - [x] Re-run bench with classifier inline; settle whether v0.1's p50 < 1ms target is reachable or needs relaxing
+- [ ] Add the architecture's decision-cache layer in front of the inline tier
+  - [ ] Without cache, every query pays ~1ms classifier overhead. With cache, ~99% of queries pay sub-microsecond. Highest-leverage piece of v0.1 work.
+- [ ] Verify forwarder + classifier latency on Raspberry Pi 4 hardware
+  - [ ] Synthesis spike's microbench projects 500–800µs p50 on Pi 4. Needs an actual measurement before v0.1 release.
 
 ## Completed
 
@@ -39,6 +43,7 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
 - MVP scope and success criteria for v0.1 — concrete in/out feature list, two-spike Phase 1 plan with go/no-go gates, technical + adoption targets, K1–K4 kill criteria carried forward. (PR #3)
 - Spike A — minimal asyncio forwarder over dnspython, +1.85ms p50 / +0.37ms p99 added latency vs direct upstream. Within Spike A's pass threshold; v0.1 p50 < 1ms target needs revisiting after Spike B. Writeup in [`docs/spike-a-results.md`](spike-a-results.md). (PR #4)
 - Spike B — domain classifier on URLhaus + Tranco. K2 passes decisively: logistic regression on char n-grams catches 81.2% of held-out malicious domains at <1% FPR (heuristics 9.2%). The "AI" claim is honest, not marketing. Writeup in [`docs/spike-b-results.md`](spike-b-results.md). (PR #5)
+- Synthesis spike — classifier extracted to `sentinel_dns/classifier.py`, wired into forwarder. Inline classifier costs 145µs p50 / 629µs p99 (microbench). End-to-end forwarder + classifier adds +2.37ms p50 vs direct upstream — v0.1's p50 < 1ms target needs relaxing to <3ms; the architecture's decision-cache layer is now the highest-leverage piece of v0.1 work. Writeup in [`docs/spike-synthesis-results.md`](spike-synthesis-results.md). (PR #6)
 
 ## Notes
 
