@@ -16,9 +16,9 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
   - [x] Resolver core: stub vs. recursive, upstream strategy, caching
   - [x] AI layer: where it sits (inline / sidecar / async), model choices
   - [x] Privacy model: what gets logged, what stays on-device, what's aggregated
-- [ ] Define MVP scope and success criteria in `docs/ROADMAP.md`
-  - [ ] What does v0.1 do that nothing else does?
-  - [ ] What metrics tell us the AI layer is earning its keep?
+- [x] Define MVP scope and success criteria in `docs/ROADMAP.md` (PR #3)
+  - [x] What does v0.1 do that nothing else does?
+  - [x] What metrics tell us the AI layer is earning its keep?
 - [ ] Spike: proof-of-concept Python DNS resolver that answers `A` queries against an upstream
   - [ ] Choose library (`dnslib` vs. `dnspython` vs. raw `asyncio`)
   - [ ] Measure baseline latency on common domains
@@ -31,6 +31,7 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
 
 - Viability analysis with verdicts on latency, competitive landscape, user segments, privacy, AI-vs-rules — wedge identified as prosumer/homelab self-hosted, with kill criteria for the spike phase. (PR #1)
 - Target architecture for v0.1 — forwarder (not recursive), hybrid inline + async AI pipeline, self-hosted privacy model, single-binary deployment. (PR #2)
+- MVP scope and success criteria for v0.1 — concrete in/out feature list, two-spike Phase 1 plan with go/no-go gates, technical + adoption targets, K1–K4 kill criteria carried forward. (PR #3)
 
 ## Notes
 
