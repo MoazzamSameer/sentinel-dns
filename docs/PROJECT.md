@@ -19,9 +19,9 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
 - [x] Define MVP scope and success criteria in `docs/ROADMAP.md` (PR #3)
   - [x] What does v0.1 do that nothing else does?
   - [x] What metrics tell us the AI layer is earning its keep?
-- [ ] Spike: proof-of-concept Python DNS resolver that answers `A` queries against an upstream
-  - [ ] Choose library (`dnslib` vs. `dnspython` vs. raw `asyncio`)
-  - [ ] Measure baseline latency on common domains
+- [x] Spike: proof-of-concept Python DNS resolver that answers `A` queries against an upstream (PR #4)
+  - [x] Choose library (`dnslib` vs. `dnspython` vs. raw `asyncio`)
+  - [x] Measure baseline latency on common domains
 - [ ] Spike: domain classifier on a public dataset (e.g. URLhaus, PhishTank)
   - [ ] Pick a dataset and document its limitations
   - [ ] Train a baseline (logistic regression on n-grams) before reaching for deep learning
@@ -32,6 +32,7 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
 - Viability analysis with verdicts on latency, competitive landscape, user segments, privacy, AI-vs-rules — wedge identified as prosumer/homelab self-hosted, with kill criteria for the spike phase. (PR #1)
 - Target architecture for v0.1 — forwarder (not recursive), hybrid inline + async AI pipeline, self-hosted privacy model, single-binary deployment. (PR #2)
 - MVP scope and success criteria for v0.1 — concrete in/out feature list, two-spike Phase 1 plan with go/no-go gates, technical + adoption targets, K1–K4 kill criteria carried forward. (PR #3)
+- Spike A — minimal asyncio forwarder over dnspython, +1.85ms p50 / +0.37ms p99 added latency vs direct upstream. Within Spike A's pass threshold; v0.1 p50 < 1ms target needs revisiting after Spike B. Writeup in [`docs/spike-a-results.md`](spike-a-results.md). (PR #4)
 
 ## Notes
 
