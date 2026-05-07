@@ -1,9 +1,13 @@
 """Forwarding DNS resolver.
 
-Accepts UDP DNS queries, optionally scores each query name with the lexical
-classifier (heuristics + n-gram LR) backed by an LRU decision cache, and
-forwards to an upstream resolver. Scoring is measurement-only — we log the
-decision but do not yet block.
+Accepts UDP DNS queries, scores each query name with the lexical classifier
+(heuristics + n-gram LR) backed by an LRU decision cache, and either
+forwards to an upstream resolver or — when `--enforce` is set — returns
+NXDOMAIN for queries the classifier flags as malicious.
+
+The classifier and cache are optional. Without `--model-path` the forwarder
+is a bare proxy. Without `--enforce` it scores but never blocks (useful for
+measurement and for letting the cache warm up before turning enforcement on).
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ class Config:
     upstream_timeout: float = 2.0
     model_path: Path | None = None
     block_threshold: float = 0.836  # 0.1% FPR operating point from spike B
+    enforce: bool = False  # off by default; flip on once you trust the classifier
     score_logging: bool = True
     cache_capacity: int = 100_000  # 0 disables caching
 
@@ -68,50 +73,76 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
             log.warning("malformed query from %s", addr)
             return
 
+        decision: Decision | None = None
         if self.classifier is not None and request.question:
-            self._score_inline(str(request.question[0].name).rstrip("."))
+            qname = str(request.question[0].name).rstrip(".")
+            decision = self._score_inline(qname)
+
+        assert self.transport is not None
+
+        if self.config.enforce and decision is not None and decision.would_block:
+            wire = self._make_nxdomain(request)
+            self.transport.sendto(wire, addr)
+            return
 
         wire = await self._forward(request)
-        assert self.transport is not None
         self.transport.sendto(wire, addr)
 
-    def _score_inline(self, qname: str) -> None:
-        """Cache-first inline scoring. Measurement-only — we log the
-        decision but do not yet block the response."""
+    def _score_inline(self, qname: str) -> Decision:
+        """Cache-first inline scoring. Returns the Decision so the caller
+        can decide whether to enforce."""
         assert self.classifier is not None
 
         if self.cache is not None:
             cached = self.cache.get(qname)
             if cached is not None:
-                if self.config.score_logging:
-                    log.info(
-                        "score qname=%s ml=%.4f heur=%.3f would_block=%s cache=hit",
-                        qname,
-                        cached.ml_score,
-                        cached.heuristic_score,
-                        cached.would_block,
-                    )
-                return
+                self._log_decision(qname, cached, cache_state="hit", inline_us=None)
+                return cached
 
         t0 = time.perf_counter_ns()
         ml = self.classifier.score(qname)
         h = heuristic_score(qname)
         elapsed_us = (time.perf_counter_ns() - t0) / 1_000.0
-        would_block = ml >= self.config.block_threshold
-        decision = Decision(ml_score=ml, heuristic_score=h, would_block=would_block)
+        decision = Decision(
+            ml_score=ml,
+            heuristic_score=h,
+            would_block=ml >= self.config.block_threshold,
+        )
 
         if self.cache is not None:
             self.cache.put(qname, decision)
 
-        if self.config.score_logging:
-            log.info(
-                "score qname=%s ml=%.4f heur=%.3f would_block=%s cache=miss inline_us=%.1f",
-                qname,
-                ml,
-                h,
-                would_block,
-                elapsed_us,
-            )
+        self._log_decision(qname, decision, cache_state="miss", inline_us=elapsed_us)
+        return decision
+
+    def _log_decision(
+        self,
+        qname: str,
+        decision: Decision,
+        *,
+        cache_state: str,
+        inline_us: float | None,
+    ) -> None:
+        if not self.config.score_logging:
+            return
+        prefix = "BLOCK" if (self.config.enforce and decision.would_block) else "score"
+        timing = f" inline_us={inline_us:.1f}" if inline_us is not None else ""
+        log.info(
+            "%s qname=%s ml=%.4f heur=%.3f would_block=%s cache=%s%s",
+            prefix,
+            qname,
+            decision.ml_score,
+            decision.heuristic_score,
+            decision.would_block,
+            cache_state,
+            timing,
+        )
+
+    @staticmethod
+    def _make_nxdomain(request: dns.message.Message) -> bytes:
+        response = dns.message.make_response(request)
+        response.set_rcode(dns.rcode.NXDOMAIN)
+        return response.to_wire()
 
     async def _forward(self, request: dns.message.Message) -> bytes:
         try:
@@ -140,13 +171,14 @@ async def serve(
         local_addr=(config.listen_host, config.listen_port),
     )
     log.info(
-        "listening on %s:%d, upstream %s:%d, classifier=%s, cache=%s",
+        "listening on %s:%d, upstream %s:%d, classifier=%s, cache=%s, enforce=%s",
         config.listen_host,
         config.listen_port,
         config.upstream_host,
         config.upstream_port,
         "on" if classifier is not None else "off",
         f"capacity={config.cache_capacity}" if cache is not None else "off",
+        "on" if config.enforce else "off",
     )
     try:
         await asyncio.Event().wait()
@@ -171,7 +203,13 @@ def main() -> None:
         "--block-threshold",
         type=float,
         default=0.836,
-        help="ML score >= this would block (measurement only in this spike).",
+        help="ML score >= this is treated as malicious.",
+    )
+    parser.add_argument(
+        "--enforce",
+        action="store_true",
+        help="Block queries whose ML score >= --block-threshold (return NXDOMAIN). "
+        "Off by default — measurement mode logs decisions but forwards everything.",
     )
     parser.add_argument(
         "--cache-capacity",
@@ -191,6 +229,9 @@ def main() -> None:
         level=args.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+    if args.enforce and args.model_path is None:
+        parser.error("--enforce requires --model-path (no classifier means nothing to enforce)")
 
     classifier: LexicalClassifier | None = None
     if args.model_path is not None:
@@ -213,6 +254,7 @@ def main() -> None:
         upstream_timeout=args.upstream_timeout,
         model_path=args.model_path,
         block_threshold=args.block_threshold,
+        enforce=args.enforce,
         score_logging=not args.quiet_scoring,
         cache_capacity=args.cache_capacity,
     )

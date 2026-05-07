@@ -10,10 +10,10 @@ Phase 0 (research) and Phase 1 (spikes + synthesis) are complete. All four kill-
 
 Listed in priority order. Top of the list = next thing to work on.
 
-- [ ] Enforcement mode — turn the inline classifier from measurement-only into an actual blocker
-  - [ ] Return NXDOMAIN (or configurable response) when `would_block` fires
-  - [ ] Structured block log includes the reasons that fired
-  - [ ] `--enforce` flag / config opt-in (off by default until we have explanations + logs)
+- [x] Enforcement mode — turn the inline classifier from measurement-only into an actual blocker (PR #13)
+  - [x] Return NXDOMAIN (or configurable response) when `would_block` fires
+  - [x] Structured block log includes the reasons that fired
+  - [x] `--enforce` flag / config opt-in (off by default until we have explanations + logs)
 - [ ] Static blocklist with URLhaus refresh
   - [ ] Load URLhaus host file at startup; refresh on a configurable interval
   - [ ] Blocklist hits are checked before the classifier (the inline tier's first layer per [`ARCHITECTURE.md`](ARCHITECTURE.md))
@@ -66,6 +66,10 @@ Listed in priority order. Top of the list = next thing to work on.
 - Spike A — minimal asyncio forwarder over dnspython, +1.85ms p50 / +0.37ms p99 added latency vs direct upstream. Within Spike A's pass threshold; v0.1 p50 < 1ms target needs revisiting after Spike B. Writeup in [`docs/spike-a-results.md`](spike-a-results.md). (PR #4)
 - Spike B — domain classifier on URLhaus + Tranco. K2 passes decisively: logistic regression on char n-grams catches 81.2% of held-out malicious domains at <1% FPR (heuristics 9.2%). The "AI" claim is honest, not marketing. Writeup in [`docs/spike-b-results.md`](spike-b-results.md). (PR #5)
 - Synthesis spike — classifier extracted to `sentinel_dns/classifier.py`, wired into forwarder. Inline classifier costs 145µs p50 / 629µs p99 (microbench). End-to-end forwarder + classifier adds +2.37ms p50 vs direct upstream — v0.1's p50 < 1ms target needs relaxing to <3ms; the architecture's decision-cache layer is now the highest-leverage piece of v0.1 work. Writeup in [`docs/spike-synthesis-results.md`](spike-synthesis-results.md). (PR #6)
+
+### Phase 2 — Build v0.1
+
+- Enforcement mode — `--enforce` flag turns the inline classifier into an actual blocker. `would_block=True` queries get NXDOMAIN instead of being forwarded; verified with live URLhaus domains. Log lines distinguish `score` (allow) from `BLOCK` (block) prefixes for cleaner grepping. Cache short-circuit and argparse safety checks both verified. Writeup in [`docs/enforcement-mode.md`](enforcement-mode.md). (PR #13)
 
 ### Phase 1 follow-ups
 
