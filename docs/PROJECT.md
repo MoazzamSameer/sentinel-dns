@@ -31,8 +31,8 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
   - [x] Persist trained model to disk; load at forwarder startup
   - [x] Score every query inline; log decision but don't block yet (measurement, not enforcement)
   - [x] Re-run bench with classifier inline; settle whether v0.1's p50 < 1ms target is reachable or needs relaxing
-- [ ] Add the architecture's decision-cache layer in front of the inline tier
-  - [ ] Without cache, every query pays ~1ms classifier overhead. With cache, ~99% of queries pay sub-microsecond. Highest-leverage piece of v0.1 work.
+- [x] Add the architecture's decision-cache layer in front of the inline tier (PR #10)
+  - [x] Without cache, every query pays ~1ms classifier overhead. With cache, ~99% of queries pay sub-microsecond. Highest-leverage piece of v0.1 work.
 - [ ] Verify forwarder + classifier latency on Raspberry Pi 4 hardware
   - [ ] Synthesis spike's microbench projects 500–800µs p50 on Pi 4. Needs an actual measurement before v0.1 release.
 
@@ -44,6 +44,7 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
 - Spike A — minimal asyncio forwarder over dnspython, +1.85ms p50 / +0.37ms p99 added latency vs direct upstream. Within Spike A's pass threshold; v0.1 p50 < 1ms target needs revisiting after Spike B. Writeup in [`docs/spike-a-results.md`](spike-a-results.md). (PR #4)
 - Spike B — domain classifier on URLhaus + Tranco. K2 passes decisively: logistic regression on char n-grams catches 81.2% of held-out malicious domains at <1% FPR (heuristics 9.2%). The "AI" claim is honest, not marketing. Writeup in [`docs/spike-b-results.md`](spike-b-results.md). (PR #5)
 - Synthesis spike — classifier extracted to `sentinel_dns/classifier.py`, wired into forwarder. Inline classifier costs 145µs p50 / 629µs p99 (microbench). End-to-end forwarder + classifier adds +2.37ms p50 vs direct upstream — v0.1's p50 < 1ms target needs relaxing to <3ms; the architecture's decision-cache layer is now the highest-leverage piece of v0.1 work. Writeup in [`docs/spike-synthesis-results.md`](spike-synthesis-results.md). (PR #6)
+- Decision cache — LRU cache from qname → Decision in `sentinel_dns/cache.py`, wired into forwarder ahead of the classifier. Cache hits are ~170 ns p50 (microbench), three orders of magnitude faster than the classifier. End-to-end overhead drops from +2.37ms p50 to +0.89ms p50 vs direct upstream — inside the relaxed v0.1 target. Writeup in [`docs/decision-cache.md`](decision-cache.md). (PR #10)
 
 ## Notes
 
