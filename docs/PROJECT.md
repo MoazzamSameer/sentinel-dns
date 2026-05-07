@@ -12,10 +12,10 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
   - [x] Latency budget: measure how much headroom AI inference has on a DNS lookup
   - [x] Competitive landscape: Cloudflare 1.1.1.1, NextDNS, Quad9, Pi-hole, AdGuard — what they do, what they don't
   - [x] User segments: consumer / prosumer / SMB / enterprise — pick one to target first
-- [ ] Draft target architecture in `docs/ARCHITECTURE.md`
-  - [ ] Resolver core: stub vs. recursive, upstream strategy, caching
-  - [ ] AI layer: where it sits (inline / sidecar / async), model choices
-  - [ ] Privacy model: what gets logged, what stays on-device, what's aggregated
+- [x] Draft target architecture in `docs/ARCHITECTURE.md` (PR #2)
+  - [x] Resolver core: stub vs. recursive, upstream strategy, caching
+  - [x] AI layer: where it sits (inline / sidecar / async), model choices
+  - [x] Privacy model: what gets logged, what stays on-device, what's aggregated
 - [ ] Define MVP scope and success criteria in `docs/ROADMAP.md`
   - [ ] What does v0.1 do that nothing else does?
   - [ ] What metrics tell us the AI layer is earning its keep?
@@ -30,6 +30,7 @@ Goal: decide whether `sentinel-dns` is worth building, in what shape, and for wh
 ## Completed
 
 - Viability analysis with verdicts on latency, competitive landscape, user segments, privacy, AI-vs-rules — wedge identified as prosumer/homelab self-hosted, with kill criteria for the spike phase. (PR #1)
+- Target architecture for v0.1 — forwarder (not recursive), hybrid inline + async AI pipeline, self-hosted privacy model, single-binary deployment. (PR #2)
 
 ## Notes
 
