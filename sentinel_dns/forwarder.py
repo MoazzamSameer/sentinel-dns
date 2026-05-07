@@ -1,9 +1,10 @@
-"""Minimal forwarding DNS resolver — Spike A.
+"""Forwarding DNS resolver — Spike A + B synthesis.
 
-Accepts UDP DNS queries on a configurable local address and forwards them to
-an upstream resolver. No filtering, no caching, no AI. Just the bare wire to
-measure how much overhead the Python + asyncio path adds before we start
-adding real logic on top.
+Accepts UDP DNS queries, optionally scores each query name with the lexical
+classifier (heuristics + n-gram LR), and forwards to an upstream resolver.
+Scoring is measurement-only in this spike — we log the decision but do not
+yet block. The point is to settle whether real classification cost fits
+the v0.1 latency budget.
 """
 
 from __future__ import annotations
@@ -11,12 +12,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import dns.asyncquery
 import dns.exception
 import dns.message
 import dns.rcode
+
+from sentinel_dns.classifier import (
+    LexicalClassifier,
+    heuristic_score,
+)
 
 log = logging.getLogger("sentinel_dns.forwarder")
 
@@ -28,11 +36,15 @@ class Config:
     upstream_host: str = "1.1.1.1"
     upstream_port: int = 53
     upstream_timeout: float = 2.0
+    model_path: Path | None = None
+    block_threshold: float = 0.836  # 0.1% FPR operating point from spike B
+    score_logging: bool = True
 
 
 class ForwardingProtocol(asyncio.DatagramProtocol):
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, classifier: LexicalClassifier | None) -> None:
         self.config = config
+        self.classifier = classifier
         self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -49,9 +61,31 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
             log.warning("malformed query from %s", addr)
             return
 
+        if self.classifier is not None and request.question:
+            self._score_inline(str(request.question[0].name).rstrip("."))
+
         wire = await self._forward(request)
         assert self.transport is not None
         self.transport.sendto(wire, addr)
+
+    def _score_inline(self, qname: str) -> None:
+        """Synchronous scoring on the inline path. Measurement-only — we log
+        the decision but do not yet block the response."""
+        assert self.classifier is not None
+        t0 = time.perf_counter_ns()
+        ml = self.classifier.score(qname)
+        h = heuristic_score(qname)
+        elapsed_us = (time.perf_counter_ns() - t0) / 1_000.0
+        would_block = ml >= self.config.block_threshold
+        if self.config.score_logging:
+            log.info(
+                "score qname=%s ml=%.4f heur=%.3f would_block=%s inline_us=%.1f",
+                qname,
+                ml,
+                h,
+                would_block,
+                elapsed_us,
+            )
 
     async def _forward(self, request: dns.message.Message) -> bytes:
         try:
@@ -69,18 +103,19 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
             return response.to_wire()
 
 
-async def serve(config: Config) -> None:
+async def serve(config: Config, classifier: LexicalClassifier | None) -> None:
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: ForwardingProtocol(config),
+        lambda: ForwardingProtocol(config, classifier),
         local_addr=(config.listen_host, config.listen_port),
     )
     log.info(
-        "listening on %s:%d, upstream %s:%d",
+        "listening on %s:%d, upstream %s:%d, classifier=%s",
         config.listen_host,
         config.listen_port,
         config.upstream_host,
         config.upstream_port,
+        "on" if classifier is not None else "off",
     )
     try:
         await asyncio.Event().wait()
@@ -89,12 +124,29 @@ async def serve(config: Config) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="sentinel-dns spike forwarder")
+    parser = argparse.ArgumentParser(description="sentinel-dns forwarder")
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, default=5354)
     parser.add_argument("--upstream-host", default="1.1.1.1")
     parser.add_argument("--upstream-port", type=int, default=53)
     parser.add_argument("--upstream-timeout", type=float, default=2.0)
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Path to a trained classifier (.joblib). If omitted, no scoring.",
+    )
+    parser.add_argument(
+        "--block-threshold",
+        type=float,
+        default=0.836,
+        help="ML score >= this would block (measurement only in this spike).",
+    )
+    parser.add_argument(
+        "--quiet-scoring",
+        action="store_true",
+        help="Disable per-query score logging (still scores, just doesn't log).",
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
@@ -102,14 +154,27 @@ def main() -> None:
         level=args.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+    classifier: LexicalClassifier | None = None
+    if args.model_path is not None:
+        log.info("loading classifier from %s", args.model_path)
+        t0 = time.perf_counter()
+        classifier = LexicalClassifier.load(args.model_path)
+        # warm — first call has import + JIT-ish overhead inside sklearn.
+        _ = classifier.score("warmup.example.com")
+        log.info("classifier ready in %.2fs", time.perf_counter() - t0)
+
     config = Config(
         listen_host=args.listen_host,
         listen_port=args.listen_port,
         upstream_host=args.upstream_host,
         upstream_port=args.upstream_port,
         upstream_timeout=args.upstream_timeout,
+        model_path=args.model_path,
+        block_threshold=args.block_threshold,
+        score_logging=not args.quiet_scoring,
     )
-    asyncio.run(serve(config))
+    asyncio.run(serve(config, classifier))
 
 
 if __name__ == "__main__":
