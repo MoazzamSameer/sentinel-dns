@@ -1,0 +1,38 @@
+# PROJECT
+
+Single source of truth for what's being worked on. One top-level item = one PR.
+
+## Phase: Research / Spike
+
+Goal: decide whether `sentinel-dns` is worth building, in what shape, and for whom — before writing the resolver.
+
+## Tasks
+
+- [ ] Write up the problem and viability analysis in `docs/RESEARCH.md`
+  - [ ] Latency budget: measure how much headroom AI inference has on a DNS lookup
+  - [ ] Competitive landscape: Cloudflare 1.1.1.1, NextDNS, Quad9, Pi-hole, AdGuard — what they do, what they don't
+  - [ ] User segments: consumer / prosumer / SMB / enterprise — pick one to target first
+- [ ] Draft target architecture in `docs/ARCHITECTURE.md`
+  - [ ] Resolver core: stub vs. recursive, upstream strategy, caching
+  - [ ] AI layer: where it sits (inline / sidecar / async), model choices
+  - [ ] Privacy model: what gets logged, what stays on-device, what's aggregated
+- [ ] Define MVP scope and success criteria in `docs/ROADMAP.md`
+  - [ ] What does v0.1 do that nothing else does?
+  - [ ] What metrics tell us the AI layer is earning its keep?
+- [ ] Spike: proof-of-concept Python DNS resolver that answers `A` queries against an upstream
+  - [ ] Choose library (`dnslib` vs. `dnspython` vs. raw `asyncio`)
+  - [ ] Measure baseline latency on common domains
+- [ ] Spike: domain classifier on a public dataset (e.g. URLhaus, PhishTank)
+  - [ ] Pick a dataset and document its limitations
+  - [ ] Train a baseline (logistic regression on n-grams) before reaching for deep learning
+  - [ ] Report precision/recall on a held-out set — false positive rate is the metric that matters
+
+## Completed
+
+_None yet._
+
+## Notes
+
+- Tasks are listed in priority order. Top of the list = next thing to work on.
+- A task gets checked off when its PR merges. The PR must include the PROJECT.md update.
+- If a spike answers a question and produces no code worth keeping, that's a successful spike — write up what was learned and close it.
