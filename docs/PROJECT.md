@@ -14,10 +14,10 @@ Listed in priority order. Top of the list = next thing to work on.
   - [x] Return NXDOMAIN (or configurable response) when `would_block` fires
   - [x] Structured block log includes the reasons that fired
   - [x] `--enforce` flag / config opt-in (off by default until we have explanations + logs)
-- [ ] Static blocklist with URLhaus refresh
-  - [ ] Load URLhaus host file at startup; refresh on a configurable interval
-  - [ ] Blocklist hits are checked before the classifier (the inline tier's first layer per [`ARCHITECTURE.md`](ARCHITECTURE.md))
-  - [ ] Optional: support StevenBlack hosts as a second feed
+- [x] Static blocklist with URLhaus refresh (PR #14)
+  - [x] Load URLhaus host file at startup; refresh on a configurable interval
+  - [x] Blocklist hits are checked before the classifier (the inline tier's first layer per [`ARCHITECTURE.md`](ARCHITECTURE.md))
+  - [ ] Multi-feed support (StevenBlack as a second source) — deferred to a follow-up
 - [ ] Plain-language explanation generator
   - [ ] Convert structured `HeuristicReasons` + classifier signals to a templated human string per the architecture's spec
   - [ ] Reused by both the block log and the (future) CLI `explain` command
@@ -70,6 +70,7 @@ Listed in priority order. Top of the list = next thing to work on.
 ### Phase 2 — Build v0.1
 
 - Enforcement mode — `--enforce` flag turns the inline classifier into an actual blocker. `would_block=True` queries get NXDOMAIN instead of being forwarded; verified with live URLhaus domains. Log lines distinguish `score` (allow) from `BLOCK` (block) prefixes for cleaner grepping. Cache short-circuit and argparse safety checks both verified. Writeup in [`docs/enforcement-mode.md`](enforcement-mode.md). (PR #13)
+- Static blocklist with URLhaus — `StaticBlocklist` in `sentinel_dns/blocklist.py`, fetched via `--blocklist-url`, refreshed in a background asyncio task on configurable interval (default 1h, fail-open). Wired into the inline tier as layer 1 (before the classifier per the architecture). Forwarder can now run as classifier-only, blocklist-only, or both. `Decision` extended with a `block_source` field ("blocklist"/"classifier"/None) for the upcoming explanation generator. Writeup in [`docs/static-blocklist.md`](static-blocklist.md). (PR #14)
 
 ### Phase 1 follow-ups
 

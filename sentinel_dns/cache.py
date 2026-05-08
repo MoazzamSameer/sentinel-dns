@@ -24,11 +24,18 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Decision:
-    """Cached classification decision for a single qname."""
+    """Cached classification decision for a single qname.
+
+    `block_source` records *why* something would block: "blocklist" for a
+    static-feed hit, "classifier" for an ML-threshold trigger, None when
+    not blocking. Used by the explanation generator and the structured
+    log line.
+    """
 
     ml_score: float
     heuristic_score: float
     would_block: bool
+    block_source: str | None = None
 
 
 class DecisionCache:
