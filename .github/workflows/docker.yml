@@ -58,7 +58,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # On PR: build only the native runner arch so we can `--load`
+          # into Docker and run the smoke test below. buildx refuses to
+          # `--load` multi-platform manifest lists. On main/tag pushes
+          # we build both arches and push the manifest list to GHCR.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
