@@ -21,10 +21,14 @@ Listed in priority order. Top of the list = next thing to work on.
 - [x] Plain-language explanation generator (PR #15)
   - [x] Convert structured `HeuristicReasons` + classifier signals to a templated human string per the architecture's spec
   - [x] Reused by both the block log (this PR) and the (future) CLI `explain` command
-- [ ] Local SQLite query log
-  - [ ] Schema for `queries` (qname, client, timestamp, decision, reasons FK) and `decisions` (qname → decision cache, persistent)
-  - [ ] Retention config (default 7 days)
-  - [ ] Forwarder writes async — must not block the response path
+- [x] Local SQLite query log — `queries` table only (PR #16)
+  - [x] Schema for `queries` (qname, client, timestamp, decision, signals)
+  - [x] Retention config (default 7 days)
+  - [x] Forwarder writes async — must not block the response path
+- [ ] Persistent decision cache (`decisions` table, in-memory cache survives restart)
+  - [ ] Backs the in-memory `DecisionCache` with the SQLite file. On startup, hydrate from disk.
+  - [ ] Reuse the QueryLog writer infrastructure rather than rolling a second one.
+  - [ ] Architecture commits to this; v0.1 ships fine without it but it's a quick follow-up.
 - [ ] TOML config file
   - [ ] Replace argparse-only with a config file + sane defaults
   - [ ] Zero-config first run
@@ -72,6 +76,7 @@ Listed in priority order. Top of the list = next thing to work on.
 - Enforcement mode — `--enforce` flag turns the inline classifier into an actual blocker. `would_block=True` queries get NXDOMAIN instead of being forwarded; verified with live URLhaus domains. Log lines distinguish `score` (allow) from `BLOCK` (block) prefixes for cleaner grepping. Cache short-circuit and argparse safety checks both verified. Writeup in [`docs/enforcement-mode.md`](enforcement-mode.md). (PR #13)
 - Static blocklist with URLhaus — `StaticBlocklist` in `sentinel_dns/blocklist.py`, fetched via `--blocklist-url`, refreshed in a background asyncio task on configurable interval (default 1h, fail-open). Wired into the inline tier as layer 1 (before the classifier per the architecture). Forwarder can now run as classifier-only, blocklist-only, or both. `Decision` extended with a `block_source` field ("blocklist"/"classifier"/None) for the upcoming explanation generator. Writeup in [`docs/static-blocklist.md`](static-blocklist.md). (PR #14)
 - Plain-language explanation generator — `explain()` in `sentinel_dns/explanation.py` converts a `Decision` into a structured `list[Reason]` and a templated human string. No LLM at query time — deterministic templates. Wired into the BLOCK log: every block produces a `signals=...` field on the `BLOCK` line plus a follow-up `explain` line with the human paragraph. The "why blocked" differentiator from RESEARCH.md is now real. Writeup in [`docs/explanations.md`](explanations.md). (PR #15)
+- SQLite query log (queries table only) — `QueryLog` in `sentinel_dns/query_log.py` with bounded asyncio.Queue + batched background writer + hourly retention purge. WAL mode + `synchronous=NORMAL` + executor-based SQL keeps the asyncio loop unblocked. Drops on overflow rather than back-pressuring the response path. Captures every query (including blocklist-only-mode allows that stdout suppresses). Persistent decision cache split into a follow-up task. Writeup in [`docs/query-log.md`](query-log.md). (PR #16)
 
 ### Phase 1 follow-ups
 

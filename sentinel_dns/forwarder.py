@@ -1,12 +1,12 @@
 """Forwarding DNS resolver.
 
 Accepts UDP DNS queries, runs them through the inline tier (decision cache
-→ static blocklist → classifier), and either forwards to upstream or — when
-`--enforce` is set — returns NXDOMAIN for queries flagged as malicious.
+→ static blocklist → classifier), records the decision (stdout + optional
+SQLite query log), and either forwards to upstream or — when `--enforce`
+is set — returns NXDOMAIN for queries flagged as malicious.
 
-The classifier, cache, and blocklist are independently optional. Without
-`--model-path` there's no classifier; without `--blocklist-url` there's no
-blocklist; without `--enforce` nothing actually blocks (measurement mode).
+Classifier, blocklist, decision cache, and SQLite log are all independently
+optional. Without any of them this is a bare forwarding proxy.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from sentinel_dns.classifier import (
     heuristic_score,
 )
 from sentinel_dns.explanation import explain
+from sentinel_dns.query_log import QueryLog, QueryRecord
 
 log = logging.getLogger("sentinel_dns.forwarder")
 
@@ -48,6 +49,17 @@ class Config:
     cache_capacity: int = 100_000  # 0 disables caching
     blocklist_url: str | None = None  # None disables the static blocklist
     blocklist_refresh_s: int = 3600
+    log_path: Path | None = None  # None disables SQLite query log
+    log_retention_days: int = 7
+
+
+@dataclass(frozen=True)
+class _ScoringResult:
+    """Inline tier output, with the breadcrumbs the caller needs to log."""
+
+    decision: Decision
+    cache_state: str  # "hit" or "miss"
+    inline_us: float | None  # None on cache hit
 
 
 class ForwardingProtocol(asyncio.DatagramProtocol):
@@ -57,11 +69,13 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
         classifier: LexicalClassifier | None,
         cache: DecisionCache | None,
         blocklist: StaticBlocklist | None,
+        query_log: QueryLog | None,
     ) -> None:
         self.config = config
         self.classifier = classifier
         self.cache = cache
         self.blocklist = blocklist
+        self.query_log = query_log
         self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -78,14 +92,15 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
             log.warning("malformed query from %s", addr)
             return
 
-        decision: Decision | None = None
+        result: _ScoringResult | None = None
         if self._has_inline_tier() and request.question:
             qname = str(request.question[0].name).rstrip(".")
-            decision = self._score_inline(qname)
+            result = self._score_inline(qname)
+            self._record(qname, addr[0], result)
 
         assert self.transport is not None
 
-        if self.config.enforce and decision is not None and decision.would_block:
+        if self.config.enforce and result is not None and result.decision.would_block:
             wire = self._make_nxdomain(request)
             self.transport.sendto(wire, addr)
             return
@@ -96,14 +111,12 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
     def _has_inline_tier(self) -> bool:
         return self.classifier is not None or self.blocklist is not None
 
-    def _score_inline(self, qname: str) -> Decision:
-        """Cache → blocklist → classifier. Returns the Decision so the
-        caller can decide whether to enforce."""
+    def _score_inline(self, qname: str) -> _ScoringResult:
+        """Cache → blocklist → classifier."""
         if self.cache is not None:
             cached = self.cache.get(qname)
             if cached is not None:
-                self._log_decision(qname, cached, cache_state="hit", inline_us=None)
-                return cached
+                return _ScoringResult(decision=cached, cache_state="hit", inline_us=None)
 
         # Layer 1: static blocklist (O(1))
         if self.blocklist is not None and qname in self.blocklist:
@@ -115,8 +128,7 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
             )
             if self.cache is not None:
                 self.cache.put(qname, decision)
-            self._log_decision(qname, decision, cache_state="miss", inline_us=None)
-            return decision
+            return _ScoringResult(decision=decision, cache_state="miss", inline_us=None)
 
         # Layer 2/3: heuristic + ML classifier
         if self.classifier is not None:
@@ -133,47 +145,94 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
             )
             if self.cache is not None:
                 self.cache.put(qname, decision)
-            self._log_decision(qname, decision, cache_state="miss", inline_us=elapsed_us)
-            return decision
+            return _ScoringResult(decision=decision, cache_state="miss", inline_us=elapsed_us)
 
-        # No classifier and no blocklist hit — nothing to block on
+        # No classifier and no blocklist hit — nothing flagged.
         decision = Decision(ml_score=0.0, heuristic_score=0.0, would_block=False)
         if self.cache is not None:
             self.cache.put(qname, decision)
-        return decision
+        return _ScoringResult(decision=decision, cache_state="miss", inline_us=None)
 
-    def _log_decision(
-        self,
-        qname: str,
-        decision: Decision,
-        *,
-        cache_state: str,
-        inline_us: float | None,
-    ) -> None:
-        if not self.config.score_logging:
-            return
+    def _record(self, qname: str, client_addr: str, result: _ScoringResult) -> None:
+        """Stdout log (visibility) + SQLite log (history). Each gated on its
+        own config — stdout obeys the existing 'only when interesting' rule,
+        SQLite logs every query when enabled."""
+        decision = result.decision
         is_block_action = self.config.enforce and decision.would_block
-        prefix = "BLOCK" if is_block_action else "score"
-        timing = f" inline_us={inline_us:.1f}" if inline_us is not None else ""
+        signals_codes: list[str] = []
+
+        if is_block_action:
+            explanation = explain(qname, decision)
+            signals_codes = explanation.signal_codes
+            if self.config.score_logging:
+                self._log_block(qname, decision, result, explanation, signals_codes)
+        elif self.config.score_logging and self._stdout_worth_logging(decision, result):
+            self._log_score(qname, decision, result)
+
+        if self.query_log is not None:
+            self.query_log.log_nowait(
+                QueryRecord(
+                    timestamp_ns=time.time_ns(),
+                    qname=qname,
+                    client_addr=client_addr,
+                    decision="block" if is_block_action else "allow",
+                    block_source=decision.block_source,
+                    ml_score=decision.ml_score,
+                    heuristic_score=decision.heuristic_score,
+                    cache_state=result.cache_state,
+                    inline_us=result.inline_us,
+                    signals=",".join(signals_codes),
+                )
+            )
+
+    @staticmethod
+    def _stdout_worth_logging(decision: Decision, result: _ScoringResult) -> bool:
+        """Avoid the blocklist-only-mode 'silent allow' spam: skip stdout
+        when no classifier ran, no blocklist hit, no cache hit."""
+        if result.cache_state == "hit":
+            return True
+        if decision.block_source is not None:
+            return True
+        if result.inline_us is not None:  # classifier actually ran
+            return True
+        return False
+
+    def _log_score(self, qname: str, decision: Decision, result: _ScoringResult) -> None:
+        timing = f" inline_us={result.inline_us:.1f}" if result.inline_us is not None else ""
         source = f" source={decision.block_source}" if decision.block_source else ""
-
-        explanation = explain(qname, decision) if is_block_action else None
-        signals = f" signals={','.join(explanation.signal_codes)}" if explanation else ""
-
         log.info(
-            "%s qname=%s ml=%.4f heur=%.3f would_block=%s cache=%s%s%s%s",
-            prefix,
+            "score qname=%s ml=%.4f heur=%.3f would_block=%s cache=%s%s%s",
             qname,
             decision.ml_score,
             decision.heuristic_score,
             decision.would_block,
-            cache_state,
+            result.cache_state,
             source,
             timing,
-            signals,
         )
-        if explanation is not None:
-            log.info("explain qname=%s — %s", qname, explanation.human)
+
+    def _log_block(
+        self,
+        qname: str,
+        decision: Decision,
+        result: _ScoringResult,
+        explanation,
+        signals_codes: list[str],
+    ) -> None:
+        timing = f" inline_us={result.inline_us:.1f}" if result.inline_us is not None else ""
+        source = f" source={decision.block_source}" if decision.block_source else ""
+        log.info(
+            "BLOCK qname=%s ml=%.4f heur=%.3f would_block=%s cache=%s%s%s signals=%s",
+            qname,
+            decision.ml_score,
+            decision.heuristic_score,
+            decision.would_block,
+            result.cache_state,
+            source,
+            timing,
+            ",".join(signals_codes),
+        )
+        log.info("explain qname=%s — %s", qname, explanation.human)
 
     @staticmethod
     def _make_nxdomain(request: dns.message.Message) -> bytes:
@@ -202,14 +261,19 @@ async def serve(
     classifier: LexicalClassifier | None,
     cache: DecisionCache | None,
     blocklist: StaticBlocklist | None,
+    query_log: QueryLog | None,
 ) -> None:
+    if query_log is not None:
+        await query_log.start()
+
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: ForwardingProtocol(config, classifier, cache, blocklist),
+        lambda: ForwardingProtocol(config, classifier, cache, blocklist, query_log),
         local_addr=(config.listen_host, config.listen_port),
     )
     log.info(
-        "listening on %s:%d, upstream %s:%d, classifier=%s, cache=%s, blocklist=%s, enforce=%s",
+        "listening on %s:%d, upstream %s:%d, classifier=%s, cache=%s, blocklist=%s, "
+        "log=%s, enforce=%s",
         config.listen_host,
         config.listen_port,
         config.upstream_host,
@@ -217,6 +281,7 @@ async def serve(
         "on" if classifier is not None else "off",
         f"capacity={config.cache_capacity}" if cache is not None else "off",
         f"size={blocklist.size}" if blocklist is not None else "off",
+        config.log_path if query_log is not None else "off",
         "on" if config.enforce else "off",
     )
 
@@ -230,6 +295,8 @@ async def serve(
         if refresh_task is not None:
             refresh_task.cancel()
         transport.close()
+        if query_log is not None:
+            await query_log.stop()
 
 
 def main() -> None:
@@ -275,9 +342,22 @@ def main() -> None:
         help="Blocklist refresh interval in seconds (default 3600).",
     )
     parser.add_argument(
+        "--log-path",
+        type=Path,
+        default=None,
+        help="Path to a SQLite file for the query log (default off).",
+    )
+    parser.add_argument(
+        "--log-retention-days",
+        type=int,
+        default=7,
+        help="Days of query log history to retain (default 7).",
+    )
+    parser.add_argument(
         "--quiet-scoring",
         action="store_true",
-        help="Disable per-query score logging (still scores, just doesn't log).",
+        help="Disable per-query stdout score logging (still scores, still writes "
+        "to SQLite if --log-path is set).",
     )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
@@ -308,7 +388,6 @@ def main() -> None:
             source_url=args.blocklist_url,
             refresh_interval_s=args.blocklist_refresh_s,
         )
-        # Synchronous initial load so we don't start serving with an empty list.
         try:
             blocklist.refresh_sync()
         except Exception as e:
@@ -319,6 +398,13 @@ def main() -> None:
     cache: DecisionCache | None = None
     if (classifier is not None or blocklist is not None) and args.cache_capacity > 0:
         cache = DecisionCache(capacity=args.cache_capacity)
+
+    query_log: QueryLog | None = None
+    if args.log_path is not None:
+        query_log = QueryLog(
+            path=args.log_path,
+            retention_days=args.log_retention_days,
+        )
 
     config = Config(
         listen_host=args.listen_host,
@@ -333,8 +419,10 @@ def main() -> None:
         cache_capacity=args.cache_capacity,
         blocklist_url=args.blocklist_url,
         blocklist_refresh_s=args.blocklist_refresh_s,
+        log_path=args.log_path,
+        log_retention_days=args.log_retention_days,
     )
-    asyncio.run(serve(config, classifier, cache, blocklist))
+    asyncio.run(serve(config, classifier, cache, blocklist, query_log))
 
 
 if __name__ == "__main__":
