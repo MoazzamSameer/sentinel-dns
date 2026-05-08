@@ -32,11 +32,12 @@ RUN useradd --system --create-home --shell /bin/bash --uid 1000 sentinel
 USER sentinel
 WORKDIR /home/sentinel
 
-# Wheel filename carries metadata (name-version-tags); pip refuses to
-# install a renamed file. Copy into a directory and glob the install.
-COPY --from=builder /build/dist/*.whl /tmp/dist/
-RUN pip install --no-cache-dir --user /tmp/dist/*.whl && \
-    rm -rf /tmp/dist
+# Bind-mount the builder's dist/ during install — nothing ends up in
+# a runtime-image layer. Keeps the wheel filename intact (pip parses
+# metadata from it) without needing a COPY + cleanup dance that has
+# to deal with root-owned files in our non-root user context.
+RUN --mount=type=bind,from=builder,source=/build/dist,target=/dist \
+    pip install --no-cache-dir --user /dist/*.whl
 
 ENV PATH=/home/sentinel/.local/bin:$PATH
 
