@@ -35,8 +35,8 @@ Listed in priority order. Top of the list = next thing to work on.
 - [x] CLI: `sentinel-dns tail` (PR #18)
   - [x] Live stream of recent queries + decisions from the SQLite log
   - [x] Filter by client, by decision type, by score threshold
-- [ ] CLI: `sentinel-dns explain <domain>`
-  - [ ] Show the latest decision for a domain, with structured reasons + plain-English explanation
+- [x] CLI: `sentinel-dns explain <domain>` (PR #19)
+  - [x] Show the latest decision for a domain, with structured reasons + plain-English explanation
 - [ ] DoH upstream
   - [ ] Switch `dns.asyncquery.udp` → DoH client. Configurable endpoint.
   - [ ] Latency re-bench — DoH adds ~5–20ms vs UDP; measure on representative networks
@@ -79,6 +79,7 @@ Listed in priority order. Top of the list = next thing to work on.
 - SQLite query log (queries table only) — `QueryLog` in `sentinel_dns/query_log.py` with bounded asyncio.Queue + batched background writer + hourly retention purge. WAL mode + `synchronous=NORMAL` + executor-based SQL keeps the asyncio loop unblocked. Drops on overflow rather than back-pressuring the response path. Captures every query (including blocklist-only-mode allows that stdout suppresses). Persistent decision cache split into a follow-up task. Writeup in [`docs/query-log.md`](query-log.md). (PR #16)
 - TOML config file — `Config` moved to `sentinel_dns/config.py` with `load_toml()` + `merge()` helpers. Flat schema (sections rejected). Precedence: CLI > file > defaults, detected via `argparse.SUPPRESS` so un-passed flags don't appear in the Namespace. Unknown TOML keys produce errors listing valid keys. Example file at repo root: [`sentinel-dns.example.toml`](../sentinel-dns.example.toml). Writeup in [`docs/configuration.md`](configuration.md). (PR #17)
 - CLI: `sentinel-dns tail` — `sentinel_dns/cli.py` dispatcher (default → forwarder, `tail` → tail subcommand) plus `sentinel_dns/tail_cmd.py` reading the SQLite log read-only via `mode=ro` URI form. One-shot or `-f` follow mode (polling every 0.5s); filters by `--decision`, `--client`, `--qname-contains`, `--min-ml-score`, `--block-source`. Block rows get an explanation line via the same `explain()` the forwarder uses. Writeup in [`docs/cli.md`](cli.md). (PR #18)
+- CLI: `sentinel-dns explain <domain>` — `sentinel_dns/explain_cmd.py` reuses the same read-only SQLite + `explain()` plumbing. Surfaces the most recent decision as a terse one-liner with structured reason bullets; `--verbose` adds raw scores + cache state + inline timing; `-n N` walks history to spot flapping classifications or cache transitions. Unseen domain → exit code 2 (clean error path for shell scripts). The "why blocked" promise is now exposed end-to-end. Writeup in [`docs/cli.md`](cli.md). (PR #19)
 
 ### Phase 1 follow-ups
 

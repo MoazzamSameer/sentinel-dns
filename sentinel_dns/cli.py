@@ -21,14 +21,15 @@ USAGE = """\
 sentinel-dns — AI-assisted DNS resolver
 
 Usage:
-  sentinel-dns [<flags>...]            Run the forwarder (default).
-  sentinel-dns tail [<flags>...]       Stream recent queries from the SQLite log.
-  sentinel-dns --help                  Show this message.
+  sentinel-dns [<flags>...]                Run the forwarder (default).
+  sentinel-dns tail [<flags>...]           Stream recent queries from the SQLite log.
+  sentinel-dns explain <domain> [<flags>]  Show why a domain was allowed or blocked.
+  sentinel-dns --help                      Show this message.
 
 Per-subcommand help: e.g. `sentinel-dns tail --help`
 """
 
-_SUBCOMMANDS = {"tail"}
+_SUBCOMMANDS = {"tail", "explain"}
 
 
 def main() -> None:
@@ -59,6 +60,10 @@ def main() -> None:
         from sentinel_dns import tail_cmd
 
         tail_cmd.main()
+    elif cmd == "explain":
+        from sentinel_dns import explain_cmd
+
+        explain_cmd.main()
 
 
 if __name__ == "__main__":
