@@ -29,28 +29,11 @@ from sentinel_dns.classifier import (
     LexicalClassifier,
     heuristic_score,
 )
+from sentinel_dns.config import Config, load_toml, merge
 from sentinel_dns.explanation import explain
 from sentinel_dns.query_log import QueryLog, QueryRecord
 
 log = logging.getLogger("sentinel_dns.forwarder")
-
-
-@dataclass(frozen=True)
-class Config:
-    listen_host: str = "127.0.0.1"
-    listen_port: int = 5354
-    upstream_host: str = "1.1.1.1"
-    upstream_port: int = 53
-    upstream_timeout: float = 2.0
-    model_path: Path | None = None
-    block_threshold: float = 0.836  # 0.1% FPR operating point from spike B
-    enforce: bool = False  # off by default; flip on once you trust the classifier
-    score_logging: bool = True
-    cache_capacity: int = 100_000  # 0 disables caching
-    blocklist_url: str | None = None  # None disables the static blocklist
-    blocklist_refresh_s: int = 3600
-    log_path: Path | None = None  # None disables SQLite query log
-    log_retention_days: int = 7
 
 
 @dataclass(frozen=True)
@@ -299,67 +282,83 @@ async def serve(
             await query_log.stop()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="sentinel-dns forwarder")
-    parser.add_argument("--listen-host", default="127.0.0.1")
-    parser.add_argument("--listen-port", type=int, default=5354)
-    parser.add_argument("--upstream-host", default="1.1.1.1")
-    parser.add_argument("--upstream-port", type=int, default=53)
-    parser.add_argument("--upstream-timeout", type=float, default=2.0)
-    parser.add_argument(
-        "--model-path",
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argparse parser. All Config-mapped flags use
+    `default=argparse.SUPPRESS` so the resulting Namespace contains
+    only keys the user explicitly set — that's what `merge()` needs."""
+    p = argparse.ArgumentParser(description="sentinel-dns forwarder")
+    p.add_argument(
+        "--config",
         type=Path,
         default=None,
+        help="Path to a TOML config file. CLI flags override file values.",
+    )
+    p.add_argument("--listen-host", default=argparse.SUPPRESS)
+    p.add_argument("--listen-port", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--upstream-host", default=argparse.SUPPRESS)
+    p.add_argument("--upstream-port", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--upstream-timeout", type=float, default=argparse.SUPPRESS)
+    p.add_argument(
+        "--model-path", type=Path, default=argparse.SUPPRESS,
         help="Path to a trained classifier (.joblib). If omitted, no scoring.",
     )
-    parser.add_argument(
-        "--block-threshold",
-        type=float,
-        default=0.836,
+    p.add_argument(
+        "--block-threshold", type=float, default=argparse.SUPPRESS,
         help="ML score >= this is treated as malicious.",
     )
-    parser.add_argument(
-        "--enforce",
-        action="store_true",
+    p.add_argument(
+        "--enforce", action="store_true", default=argparse.SUPPRESS,
         help="Block queries flagged as malicious (return NXDOMAIN). "
         "Off by default — measurement mode logs decisions but forwards everything.",
     )
-    parser.add_argument(
-        "--cache-capacity",
-        type=int,
-        default=100_000,
+    p.add_argument(
+        "--cache-capacity", type=int, default=argparse.SUPPRESS,
         help="Decision cache capacity (0 disables).",
     )
-    parser.add_argument(
-        "--blocklist-url",
-        default=None,
+    p.add_argument(
+        "--blocklist-url", default=argparse.SUPPRESS,
         help=f"Static blocklist source (default off; set to {URLHAUS_URL!r} to enable URLhaus).",
     )
-    parser.add_argument(
-        "--blocklist-refresh-s",
-        type=int,
-        default=3600,
+    p.add_argument(
+        "--blocklist-refresh-s", type=int, default=argparse.SUPPRESS,
         help="Blocklist refresh interval in seconds (default 3600).",
     )
-    parser.add_argument(
-        "--log-path",
-        type=Path,
-        default=None,
+    p.add_argument(
+        "--log-path", type=Path, default=argparse.SUPPRESS,
         help="Path to a SQLite file for the query log (default off).",
     )
-    parser.add_argument(
-        "--log-retention-days",
-        type=int,
-        default=7,
+    p.add_argument(
+        "--log-retention-days", type=int, default=argparse.SUPPRESS,
         help="Days of query log history to retain (default 7).",
     )
-    parser.add_argument(
-        "--quiet-scoring",
-        action="store_true",
+    p.add_argument(
+        "--quiet-scoring", action="store_true", default=argparse.SUPPRESS,
         help="Disable per-query stdout score logging (still scores, still writes "
-        "to SQLite if --log-path is set).",
+        "to SQLite if a log path is set).",
     )
-    parser.add_argument("--log-level", default="INFO")
+    # Non-Config args: not merged.
+    p.add_argument("--log-level", default="INFO")
+    return p
+
+
+def _args_to_overrides(args: argparse.Namespace) -> dict:
+    """Translate parsed argparse Namespace to Config-field overrides.
+    Only keys the user actually set are present (because of SUPPRESS).
+    Hyphens become underscores; --quiet-scoring inverts to score_logging."""
+    raw = vars(args)
+    overrides: dict = {}
+    for key, value in raw.items():
+        if key in {"config", "log_level"}:
+            continue
+        if key == "quiet_scoring":
+            overrides["score_logging"] = not value
+        else:
+            overrides[key] = value
+    return overrides
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -367,61 +366,58 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    if args.enforce and args.model_path is None and args.blocklist_url is None:
+    file_overrides: dict = {}
+    if args.config is not None:
+        try:
+            file_overrides = load_toml(args.config)
+        except (OSError, ValueError) as e:
+            parser.error(f"--config: {e}")
+
+    cli_overrides = _args_to_overrides(args)
+    try:
+        config = merge(cli_overrides, file_overrides)
+    except ValueError as e:
+        parser.error(str(e))
+
+    if config.enforce and config.model_path is None and config.blocklist_url is None:
         parser.error(
-            "--enforce requires --model-path and/or --blocklist-url "
+            "enforce=true requires model_path and/or blocklist_url "
             "(no inline tier means nothing to enforce against)"
         )
 
     classifier: LexicalClassifier | None = None
-    if args.model_path is not None:
-        log.info("loading classifier from %s", args.model_path)
+    if config.model_path is not None:
+        log.info("loading classifier from %s", config.model_path)
         t0 = time.perf_counter()
-        classifier = LexicalClassifier.load(args.model_path)
+        classifier = LexicalClassifier.load(config.model_path)
         # warm — first call has import + JIT-ish overhead inside sklearn.
         _ = classifier.score("warmup.example.com")
         log.info("classifier ready in %.2fs", time.perf_counter() - t0)
 
     blocklist: StaticBlocklist | None = None
-    if args.blocklist_url is not None:
+    if config.blocklist_url is not None and config.blocklist_url != "":
         blocklist = StaticBlocklist(
-            source_url=args.blocklist_url,
-            refresh_interval_s=args.blocklist_refresh_s,
+            source_url=config.blocklist_url,
+            refresh_interval_s=config.blocklist_refresh_s,
         )
         try:
             blocklist.refresh_sync()
         except Exception as e:
             log.error("blocklist initial load failed: %s", e)
-            log.error("not starting; pass --blocklist-url '' to disable, or fix network access")
+            log.error("not starting; remove blocklist_url or fix network access")
             raise SystemExit(1)
 
     cache: DecisionCache | None = None
-    if (classifier is not None or blocklist is not None) and args.cache_capacity > 0:
-        cache = DecisionCache(capacity=args.cache_capacity)
+    if (classifier is not None or blocklist is not None) and config.cache_capacity > 0:
+        cache = DecisionCache(capacity=config.cache_capacity)
 
     query_log: QueryLog | None = None
-    if args.log_path is not None:
+    if config.log_path is not None:
         query_log = QueryLog(
-            path=args.log_path,
-            retention_days=args.log_retention_days,
+            path=config.log_path,
+            retention_days=config.log_retention_days,
         )
 
-    config = Config(
-        listen_host=args.listen_host,
-        listen_port=args.listen_port,
-        upstream_host=args.upstream_host,
-        upstream_port=args.upstream_port,
-        upstream_timeout=args.upstream_timeout,
-        model_path=args.model_path,
-        block_threshold=args.block_threshold,
-        enforce=args.enforce,
-        score_logging=not args.quiet_scoring,
-        cache_capacity=args.cache_capacity,
-        blocklist_url=args.blocklist_url,
-        blocklist_refresh_s=args.blocklist_refresh_s,
-        log_path=args.log_path,
-        log_retention_days=args.log_retention_days,
-    )
     asyncio.run(serve(config, classifier, cache, blocklist, query_log))
 
 

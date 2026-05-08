@@ -29,9 +29,9 @@ Listed in priority order. Top of the list = next thing to work on.
   - [ ] Backs the in-memory `DecisionCache` with the SQLite file. On startup, hydrate from disk.
   - [ ] Reuse the QueryLog writer infrastructure rather than rolling a second one.
   - [ ] Architecture commits to this; v0.1 ships fine without it but it's a quick follow-up.
-- [ ] TOML config file
-  - [ ] Replace argparse-only with a config file + sane defaults
-  - [ ] Zero-config first run
+- [x] TOML config file (PR #17)
+  - [x] Replace argparse-only with a config file + sane defaults
+  - [x] Zero-config first run
 - [ ] CLI: `sentinel-dns tail`
   - [ ] Live stream of recent queries + decisions from the SQLite log
   - [ ] Filter by client, by decision type, by score threshold
@@ -77,6 +77,7 @@ Listed in priority order. Top of the list = next thing to work on.
 - Static blocklist with URLhaus — `StaticBlocklist` in `sentinel_dns/blocklist.py`, fetched via `--blocklist-url`, refreshed in a background asyncio task on configurable interval (default 1h, fail-open). Wired into the inline tier as layer 1 (before the classifier per the architecture). Forwarder can now run as classifier-only, blocklist-only, or both. `Decision` extended with a `block_source` field ("blocklist"/"classifier"/None) for the upcoming explanation generator. Writeup in [`docs/static-blocklist.md`](static-blocklist.md). (PR #14)
 - Plain-language explanation generator — `explain()` in `sentinel_dns/explanation.py` converts a `Decision` into a structured `list[Reason]` and a templated human string. No LLM at query time — deterministic templates. Wired into the BLOCK log: every block produces a `signals=...` field on the `BLOCK` line plus a follow-up `explain` line with the human paragraph. The "why blocked" differentiator from RESEARCH.md is now real. Writeup in [`docs/explanations.md`](explanations.md). (PR #15)
 - SQLite query log (queries table only) — `QueryLog` in `sentinel_dns/query_log.py` with bounded asyncio.Queue + batched background writer + hourly retention purge. WAL mode + `synchronous=NORMAL` + executor-based SQL keeps the asyncio loop unblocked. Drops on overflow rather than back-pressuring the response path. Captures every query (including blocklist-only-mode allows that stdout suppresses). Persistent decision cache split into a follow-up task. Writeup in [`docs/query-log.md`](query-log.md). (PR #16)
+- TOML config file — `Config` moved to `sentinel_dns/config.py` with `load_toml()` + `merge()` helpers. Flat schema (sections rejected). Precedence: CLI > file > defaults, detected via `argparse.SUPPRESS` so un-passed flags don't appear in the Namespace. Unknown TOML keys produce errors listing valid keys. Example file at repo root: [`sentinel-dns.example.toml`](../sentinel-dns.example.toml). Writeup in [`docs/configuration.md`](configuration.md). (PR #17)
 
 ### Phase 1 follow-ups
 
