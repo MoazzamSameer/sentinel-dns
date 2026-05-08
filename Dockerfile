@@ -32,9 +32,11 @@ RUN useradd --system --create-home --shell /bin/bash --uid 1000 sentinel
 USER sentinel
 WORKDIR /home/sentinel
 
-COPY --from=builder /build/dist/*.whl /tmp/sentinel.whl
-RUN pip install --no-cache-dir --user /tmp/sentinel.whl && \
-    rm /tmp/sentinel.whl
+# Wheel filename carries metadata (name-version-tags); pip refuses to
+# install a renamed file. Copy into a directory and glob the install.
+COPY --from=builder /build/dist/*.whl /tmp/dist/
+RUN pip install --no-cache-dir --user /tmp/dist/*.whl && \
+    rm -rf /tmp/dist
 
 ENV PATH=/home/sentinel/.local/bin:$PATH
 
