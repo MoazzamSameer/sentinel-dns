@@ -43,9 +43,9 @@ Listed in priority order. Top of the list = next thing to work on.
 - [x] README quickstart (PR #21)
   - [x] One-page install + first-run flow for a homelab user
   - [x] Explain config defaults, blocklist sources, where logs live
-- [ ] PyPI distribution
-  - [ ] CI publish on tag (GitHub Actions)
-  - [ ] Test that `pipx install sentinel-dns` works clean on a fresh machine
+- [x] PyPI distribution (PR #22)
+  - [x] CI publish on tag (GitHub Actions, OIDC trusted publishing)
+  - [x] Tested locally: `python -m build` → `pip install dist/*.whl` → `sentinel-dns --help` + live DoH/blocklist smoke. Actual `pip install sentinel-dns` is gated on the first PyPI publish.
 - [ ] Docker distribution
   - [ ] Multi-arch image (amd64 + arm64) — arm64 is the prosumer/Pi target
   - [ ] Document the `--cap-add=NET_BIND_SERVICE` / port mapping pattern for binding `:53`
@@ -82,6 +82,7 @@ Listed in priority order. Top of the list = next thing to work on.
 - CLI: `sentinel-dns explain <domain>` — `sentinel_dns/explain_cmd.py` reuses the same read-only SQLite + `explain()` plumbing. Surfaces the most recent decision as a terse one-liner with structured reason bullets; `--verbose` adds raw scores + cache state + inline timing; `-n N` walks history to spot flapping classifications or cache transitions. Unseen domain → exit code 2 (clean error path for shell scripts). The "why blocked" promise is now exposed end-to-end. Writeup in [`docs/cli.md`](cli.md). (PR #19)
 - DoH upstream — `--upstream-doh-url` flag / `upstream_doh_url` TOML key dispatches to `dns.asyncquery.https()` instead of UDP. Single shared `httpx.AsyncClient` (HTTP/2 pinned) holds the TLS session for the forwarder's lifetime; without it, dnspython opens a fresh TLS session per query and adds +118ms p50. With it, +36ms p50 vs UDP forwarder. Bad URLs return SERVFAIL cleanly via a broader `_forward` exception catch. Adds `httpx[http2]` as a base dep. Writeup in [`docs/doh-upstream.md`](doh-upstream.md). (PR #20)
 - README quickstart — full README rewrite. Tagline encodes the wedge (self-hosted + plain-English explanations + lexical detection). Two-tier quickstart: 30-second blocklist-only, full version with classifier + cache + log + tail. Comparison table from ROADMAP for differentiation. Status section makes "early v0.x" honest. Quickstart commands smoke-tested end-to-end via `dig`. (PR #21)
+- PyPI distribution — `.github/workflows/release.yml` builds sdist+wheel on PRs touching the package, publishes to PyPI on `v*` tag pushes via OIDC trusted publishing (no API token in GitHub secrets). Build job verifies the wheel installs in a clean venv and the `sentinel-dns` entry point loads. Local end-to-end smoke confirmed: clean venv → wheel install → forwarder runs → `dig` resolves benign + blocks URLhaus domain. Process documented in [`docs/releasing.md`](releasing.md). First publish gated on PyPI trusted-publisher one-time setup + actual decision to release. (PR #22)
 
 ### Phase 1 follow-ups
 
