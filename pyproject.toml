@@ -20,7 +20,7 @@ dev = [
 ]
 
 [project.scripts]
-sentinel-dns = "sentinel_dns.forwarder:main"
+sentinel-dns = "sentinel_dns.cli:main"
 
 [build-system]
 requires = ["hatchling"]

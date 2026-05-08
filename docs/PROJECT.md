@@ -32,9 +32,9 @@ Listed in priority order. Top of the list = next thing to work on.
 - [x] TOML config file (PR #17)
   - [x] Replace argparse-only with a config file + sane defaults
   - [x] Zero-config first run
-- [ ] CLI: `sentinel-dns tail`
-  - [ ] Live stream of recent queries + decisions from the SQLite log
-  - [ ] Filter by client, by decision type, by score threshold
+- [x] CLI: `sentinel-dns tail` (PR #18)
+  - [x] Live stream of recent queries + decisions from the SQLite log
+  - [x] Filter by client, by decision type, by score threshold
 - [ ] CLI: `sentinel-dns explain <domain>`
   - [ ] Show the latest decision for a domain, with structured reasons + plain-English explanation
 - [ ] DoH upstream
@@ -78,6 +78,7 @@ Listed in priority order. Top of the list = next thing to work on.
 - Plain-language explanation generator — `explain()` in `sentinel_dns/explanation.py` converts a `Decision` into a structured `list[Reason]` and a templated human string. No LLM at query time — deterministic templates. Wired into the BLOCK log: every block produces a `signals=...` field on the `BLOCK` line plus a follow-up `explain` line with the human paragraph. The "why blocked" differentiator from RESEARCH.md is now real. Writeup in [`docs/explanations.md`](explanations.md). (PR #15)
 - SQLite query log (queries table only) — `QueryLog` in `sentinel_dns/query_log.py` with bounded asyncio.Queue + batched background writer + hourly retention purge. WAL mode + `synchronous=NORMAL` + executor-based SQL keeps the asyncio loop unblocked. Drops on overflow rather than back-pressuring the response path. Captures every query (including blocklist-only-mode allows that stdout suppresses). Persistent decision cache split into a follow-up task. Writeup in [`docs/query-log.md`](query-log.md). (PR #16)
 - TOML config file — `Config` moved to `sentinel_dns/config.py` with `load_toml()` + `merge()` helpers. Flat schema (sections rejected). Precedence: CLI > file > defaults, detected via `argparse.SUPPRESS` so un-passed flags don't appear in the Namespace. Unknown TOML keys produce errors listing valid keys. Example file at repo root: [`sentinel-dns.example.toml`](../sentinel-dns.example.toml). Writeup in [`docs/configuration.md`](configuration.md). (PR #17)
+- CLI: `sentinel-dns tail` — `sentinel_dns/cli.py` dispatcher (default → forwarder, `tail` → tail subcommand) plus `sentinel_dns/tail_cmd.py` reading the SQLite log read-only via `mode=ro` URI form. One-shot or `-f` follow mode (polling every 0.5s); filters by `--decision`, `--client`, `--qname-contains`, `--min-ml-score`, `--block-source`. Block rows get an explanation line via the same `explain()` the forwarder uses. Writeup in [`docs/cli.md`](cli.md). (PR #18)
 
 ### Phase 1 follow-ups
 
