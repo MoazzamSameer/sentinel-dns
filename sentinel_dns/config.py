@@ -30,6 +30,9 @@ class Config:
     upstream_host: str = "1.1.1.1"
     upstream_port: int = 53
     upstream_timeout: float = 2.0
+    # When set, queries go upstream over DoH instead of plain UDP.
+    # ISP can see only the DoH endpoint, not which domains are queried.
+    upstream_doh_url: str | None = None
 
     model_path: Path | None = None
     block_threshold: float = 0.836  # 0.1% FPR operating point from Spike B

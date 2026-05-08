@@ -14,9 +14,15 @@ listen_host = "127.0.0.1"
 listen_port = 5354
 
 # --- Upstream resolver (forwarded queries) ---
+# Default is plain UDP/53. The ISP can see plaintext DNS queries.
 upstream_host = "1.1.1.1"
 upstream_port = 53
 upstream_timeout = 2.0
+
+# Uncomment to use DNS-over-HTTPS instead of UDP. The ISP then only
+# sees you talking to the DoH endpoint, not which domains you query.
+# Costs ~5–20ms p50 vs UDP — see docs/doh-upstream.md for measurements.
+# upstream_doh_url = "https://cloudflare-dns.com/dns-query"
 
 # --- Inline classifier ---
 # Path to a model trained with scripts/train_classifier.py.
