@@ -34,9 +34,16 @@ The full reasoning is in [`docs/RESEARCH.md`](docs/RESEARCH.md).
 
 ## Quickstart
 
-### 30-second version: blocklist-only enforcement
+### 30-second version: blocklist-only enforcement (Docker)
 
-No Python training required — pulls URLhaus on startup, blocks anything on the feed.
+```bash
+docker run --rm -p 5354:5354/udp ghcr.io/moazzamsameer/sentinel-dns:latest \
+    --listen-host 0.0.0.0 \
+    --blocklist-url https://urlhaus.abuse.ch/downloads/hostfile/ \
+    --enforce
+```
+
+Or from source — no Python training required, pulls URLhaus on startup:
 
 ```bash
 git clone https://github.com/MoazzamSameer/sentinel-dns.git
@@ -106,6 +113,7 @@ Inspect any past decision:
 - **SQLite query log** with retention, async batched writes, never blocks the response path. ([docs/query-log.md](docs/query-log.md))
 - **CLI inspection tools**: `tail -f` for live streaming, `explain <domain>` for retrospective lookups. ([docs/cli.md](docs/cli.md))
 - **TOML config** with CLI override precedence. ([docs/configuration.md](docs/configuration.md))
+- **Multi-arch Docker image** (`amd64` + `arm64`) at `ghcr.io/moazzamsameer/sentinel-dns`. Three documented deployment patterns including `--cap-add NET_BIND_SERVICE` for binding `:53`. ([docs/docker.md](docs/docker.md))
 
 ## How well does it work?
 

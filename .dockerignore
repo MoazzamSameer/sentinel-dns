@@ -1,0 +1,48 @@
+# Local data + models — fetched/generated, never baked into images.
+data/
+models/
+
+# Build artifacts.
+dist/
+build/
+*.egg-info/
+
+# Virtualenvs.
+.venv/
+venv/
+
+# VCS + IDE.
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# Tests, docs, and examples — not needed in the runtime image. Keep
+# README.md and LICENSE because pyproject.toml's metadata references
+# README.md and hatchling auto-bundles LICENSE into the wheel.
+tests/
+docs/
+bench/
+scripts/
+sentinel-dns.example.toml
+
+# Python bytecode / cache.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# OS junk.
+.DS_Store
+*.swp
+
+# Sample SQLite output from local runs.
+*.db
+*.db-wal
+*.db-shm
+
+# Build configs we don't ship.
+Dockerfile
+.dockerignore

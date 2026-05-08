@@ -46,9 +46,9 @@ Listed in priority order. Top of the list = next thing to work on.
 - [x] PyPI distribution (PR #22)
   - [x] CI publish on tag (GitHub Actions, OIDC trusted publishing)
   - [x] Tested locally: `python -m build` → `pip install dist/*.whl` → `sentinel-dns --help` + live DoH/blocklist smoke. Actual `pip install sentinel-dns` is gated on the first PyPI publish.
-- [ ] Docker distribution
-  - [ ] Multi-arch image (amd64 + arm64) — arm64 is the prosumer/Pi target
-  - [ ] Document the `--cap-add=NET_BIND_SERVICE` / port mapping pattern for binding `:53`
+- [x] Docker distribution (PR #23)
+  - [x] Multi-arch image (amd64 + arm64) — arm64 is the prosumer/Pi target
+  - [x] Document the `--cap-add=NET_BIND_SERVICE` / port mapping pattern for binding `:53`
 - [ ] Async scorer (may slip to v0.2)
   - [ ] Decoupled worker pool consuming a queue of (qname, client metadata)
   - [ ] WHOIS age + ASN reputation lookups
@@ -83,6 +83,7 @@ Listed in priority order. Top of the list = next thing to work on.
 - DoH upstream — `--upstream-doh-url` flag / `upstream_doh_url` TOML key dispatches to `dns.asyncquery.https()` instead of UDP. Single shared `httpx.AsyncClient` (HTTP/2 pinned) holds the TLS session for the forwarder's lifetime; without it, dnspython opens a fresh TLS session per query and adds +118ms p50. With it, +36ms p50 vs UDP forwarder. Bad URLs return SERVFAIL cleanly via a broader `_forward` exception catch. Adds `httpx[http2]` as a base dep. Writeup in [`docs/doh-upstream.md`](doh-upstream.md). (PR #20)
 - README quickstart — full README rewrite. Tagline encodes the wedge (self-hosted + plain-English explanations + lexical detection). Two-tier quickstart: 30-second blocklist-only, full version with classifier + cache + log + tail. Comparison table from ROADMAP for differentiation. Status section makes "early v0.x" honest. Quickstart commands smoke-tested end-to-end via `dig`. (PR #21)
 - PyPI distribution — `.github/workflows/release.yml` builds sdist+wheel on PRs touching the package, publishes to PyPI on `v*` tag pushes via OIDC trusted publishing (no API token in GitHub secrets). Build job verifies the wheel installs in a clean venv and the `sentinel-dns` entry point loads. Local end-to-end smoke confirmed: clean venv → wheel install → forwarder runs → `dig` resolves benign + blocks URLhaus domain. Process documented in [`docs/releasing.md`](releasing.md). First publish gated on PyPI trusted-publisher one-time setup + actual decision to release. (PR #22)
+- Docker distribution — multi-stage `Dockerfile` (python:3.13-slim base, non-root user, runtime image is just the wheel + deps + a UDP DNS healthcheck). `.github/workflows/docker.yml` builds linux/amd64 + linux/arm64 via QEMU + buildx, pushes to `ghcr.io/moazzamsameer/sentinel-dns` on main and tags. PR builds run a smoke test (start container, dig benign + dig URLhaus + assert NXDOMAIN) so packaging regressions are caught at PR time. Three deployment patterns documented in [`docs/docker.md`](docker.md): unprivileged 5354 mapping, port-mapped to host's 53 (recommended), or `--network host` + `--cap-add NET_BIND_SERVICE`. Image does not bundle the trained classifier model — too volatile and 10× the image size; mount it from the host. Local Docker not available on this dev machine, so CI gates the build; PR description flags this. (PR #23)
 
 ### Phase 1 follow-ups
 
