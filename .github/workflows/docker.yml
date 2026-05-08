@@ -72,31 +72,46 @@ jobs:
 
       - name: Smoke-test the amd64 image
         # `load: true` above only loaded a single arch; on PRs that's the
-        # native arch (amd64). For tag pushes we re-pull the published
-        # tag for the runner arch.
+        # native arch (amd64).
         if: github.event_name == 'pull_request'
+        # No pipefail / no -e — we want every check to print before any
+        # failure short-circuits the rest. Each assertion is gated on its
+        # own && exit.
+        shell: bash
         run: |
-          set -euxo pipefail
-          # Find the locally loaded image tag — pick the first one buildx wrote.
+          set -x
           IMG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
           echo "smoke-testing $IMG"
           docker run --rm -d -p 5354:5354/udp --name sd "$IMG" \
             --listen-host 0.0.0.0 --listen-port 5354 \
             --blocklist-url https://urlhaus.abuse.ch/downloads/hostfile/ \
             --enforce
-          # Give the blocklist time to download.
           sleep 8
-          docker logs sd | grep -E "listening|blocklist refreshed"
 
-          # Resolve a benign domain — should succeed.
-          dig @127.0.0.1 -p 5354 google.com +short +tries=1 +time=3
+          echo "::group::container logs"
+          docker logs sd
+          echo "::endgroup::"
 
-          # Block test — pick a real entry from the same URLhaus feed
-          # the container is using, so the test is resilient to URLhaus
-          # rotating individual entries off the feed.
+          echo "::group::benign dig"
+          dig @127.0.0.1 -p 5354 google.com +tries=1 +time=3
+          BENIGN_RC=$?
+          echo "::endgroup::"
+
+          # Pick a real entry from the same URLhaus feed the container
+          # loaded, so the test is robust to URLhaus rotating entries.
           BAD=$(curl -sS https://urlhaus.abuse.ch/downloads/hostfile/ \
             | awk '$1 == "127.0.0.1" && $2 !~ /^[0-9.]+$/ { print $2; exit }')
           echo "block-testing: $BAD"
-          dig @127.0.0.1 -p 5354 "$BAD" | grep -q "status: NXDOMAIN"
+
+          echo "::group::block dig"
+          BLOCK_OUTPUT=$(dig @127.0.0.1 -p 5354 "$BAD" +tries=1 +time=3)
+          echo "$BLOCK_OUTPUT"
+          echo "::endgroup::"
 
           docker stop sd
+
+          # Assertions
+          [ $BENIGN_RC -eq 0 ] || { echo "FAIL: benign dig failed"; exit 1; }
+          echo "$BLOCK_OUTPUT" | grep -q "status: NXDOMAIN" \
+            || { echo "FAIL: block didn't NXDOMAIN"; exit 1; }
+          echo "smoke OK"
