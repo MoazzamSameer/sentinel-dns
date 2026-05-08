@@ -99,8 +99,11 @@ jobs:
 
           # Pick a real entry from the same URLhaus feed the container
           # loaded, so the test is robust to URLhaus rotating entries.
-          BAD=$(curl -sS https://urlhaus.abuse.ch/downloads/hostfile/ \
-            | awk '$1 == "127.0.0.1" && $2 !~ /^[0-9.]+$/ { print $2; exit }')
+          # Buffer to disk first — curl | awk-with-exit produces a SIGPIPE
+          # on curl that GitHub's default `shell: bash -eo pipefail`
+          # propagates as a step failure (exit 23).
+          curl -sS https://urlhaus.abuse.ch/downloads/hostfile/ -o /tmp/hostfile
+          BAD=$(awk '$1 == "127.0.0.1" && $2 !~ /^[0-9.]+$/ { print $2; exit }' /tmp/hostfile)
           echo "block-testing: $BAD"
 
           echo "::group::block dig"
