@@ -7,11 +7,12 @@ This task adds the first inspection subcommand — `sentinel-dns tail` — and t
 ## Layout
 
 ```
-sentinel-dns                            → forwarder (default, backward compatible)
-sentinel-dns --listen-port 5354 ...     → forwarder (still works exactly as before)
-sentinel-dns tail [--flags...]          → SQLite query log streamer
-sentinel-dns --help                     → top-level help (lists subcommands)
-sentinel-dns tail --help                → tail's own argparse help
+sentinel-dns                                    → forwarder (default, backward compatible)
+sentinel-dns --listen-port 5354 ...             → forwarder (still works exactly as before)
+sentinel-dns tail [--flags...]                  → SQLite query log streamer
+sentinel-dns explain <domain> [--flags...]      → most recent decision for a domain
+sentinel-dns --help                             → top-level help (lists subcommands)
+sentinel-dns <subcommand> --help                → subcommand's own argparse help
 ```
 
 The dispatcher in [`sentinel_dns/cli.py`](../sentinel_dns/cli.py) is ~30 lines. The first positional arg picks the subcommand; if the first arg is missing or starts with `-`, control falls through to the existing `forwarder.main()`. This preserves the original entry-point behavior — `sentinel-dns --config foo.toml` keeps working without change.
@@ -92,7 +93,107 @@ Smoke test ran four cases against a forwarder writing to a fresh SQLite file:
 
 The follow-mode test specifically confirmed live streaming: started `tail -f --decision block`, then sent fresh queries, saw a new `BLOCK xxxxx.lat (.lat TLD, ML 93%)` record show up in the tail output without restarting.
 
+## `sentinel-dns explain <domain>`
+
+[`sentinel_dns/explain_cmd.py`](../sentinel_dns/explain_cmd.py) — ~120 lines.
+
+### What it does
+
+Surfaces the most recent decision for a single domain along with its plain-English explanation. Reads the SQLite log read-only (same `mode=ro` URI as `tail`); no classifier or blocklist is loaded — that would be heavy for an interactive command.
+
+If a domain has never been queried (or its records have been purged by retention), `explain` prints a "no records" message to stderr and exits with code 2. That distinguishes "I looked and there's nothing" from "I successfully looked it up" for shell scripting.
+
+### Output
+
+**Blocked domain — terse default:**
+
+```
+$ sentinel-dns explain 1ce6-route.fixionmunici9al.lat --log-path /tmp/sentinel.db
+
+1ce6-route.fixionmunici9al.lat — BLOCKED at 2026-05-08 17:13:04 from 127.0.0.1 (source: classifier)
+
+  • lexical_classifier     Our ML model is 100% confident this name looks malicious.
+  • abused_tld             Uses the .lat TLD, frequently abused for short-lived attack domains.
+```
+
+**Allowed domain:**
+
+```
+$ sentinel-dns explain google.com --log-path /tmp/sentinel.db
+
+google.com — allowed at 2026-05-08 17:13:04 from 127.0.0.1
+```
+
+(No structured reasons because nothing flagged it — the natural absence is its own answer.)
+
+**Unseen domain (exit code 2):**
+
+```
+$ sentinel-dns explain not-in-log.example.com --log-path /tmp/sentinel.db
+not-in-log.example.com — no records in log (never queried, or already purged)
+$ echo $?
+2
+```
+
+### `--verbose`
+
+Adds the raw scores, cache state, inline timing, and stored signal codes:
+
+```
+$ sentinel-dns explain 1ce6-route.fixionmunici9al.lat --verbose --log-path /tmp/sentinel.db
+
+1ce6-route.fixionmunici9al.lat — BLOCKED at 2026-05-08 17:13:04 from 127.0.0.1 (source: classifier)
+
+  • lexical_classifier     Our ML model is 100% confident this name looks malicious.
+  • abused_tld             Uses the .lat TLD, frequently abused for short-lived attack domains.
+
+  ML score:        0.9980
+  Heuristic score: 0.300
+  Cache state:     miss
+  Inline scoring:  496.1µs
+  Stored signals:  lexical_classifier,abused_tld
+```
+
+### `-n N` for history
+
+Useful for diagnosing flapping classifications or seeing the cache effect:
+
+```
+$ sentinel-dns explain google.com -n 2 --verbose --log-path /tmp/sentinel.db
+
+google.com — allowed at 2026-05-08 17:13:04 from 127.0.0.1
+  ML score:        0.0274
+  Cache state:     miss
+  Inline scoring:  446.3µs
+
+google.com — allowed at 2026-05-08 17:13:04 from 127.0.0.1
+  ML score:        0.0274
+  Cache state:     hit          ← second query took the cache shortcut
+```
+
+### Verification
+
+Five smoke tests passed:
+
+| Case | Result |
+|---|---|
+| Blocked domain | Decision + source + signals + human reasons ✅ |
+| Allowed domain | Terse line, no false-positive reasons ✅ |
+| Unseen domain | Stderr message + exit 2 ✅ |
+| `--verbose` on a block | Adds scores, cache state, inline timing, stored signals ✅ |
+| `-n 2 --verbose` on repeat query | Two records chronologically, miss → hit transition visible ✅ |
+
+### Reuses the same primitives
+
+- `_open_readonly()` — same `mode=ro` URI form as `tail_cmd`
+- `explain()` — same templated reason generation as the forwarder's BLOCK log line
+- `Decision` — reconstructed from the row, same shape as the in-memory cache stores
+
+The forwarder, `tail`, and `explain` produce identical prose for the same logical decision because they all route through one `explain()` function.
+
 ## Caveats
+
+The points below cover both `tail` and `explain` unless noted otherwise.
 
 1. **Default `--log-path` is `sentinel.db` in the current directory.** No XDG / `/var/lib` discovery. Pass `--log-path` explicitly if you keep the file somewhere else (most users will). Same posture as `--config` — explicit beats implicit.
 2. **Polling, not native LISTEN/NOTIFY.** SQLite doesn't have first-class change notifications, so follow mode polls every `--poll-interval` seconds (default 0.5s). Means up to 0.5s lag in follow mode, which is fine for a human watching but explicit.
@@ -100,10 +201,12 @@ The follow-mode test specifically confirmed live streaming: started `tail -f --d
 4. **No JSON output mode.** Raw `sqlite3` CLI is the escape hatch for now; `--json` for piping into `jq`/scripts is post-v0.1 polish.
 5. **`-n 0 -f` shows recent history.** If you want only new records, the workaround is `-n 0 -f` accepts but `last_id` starts at 0, so the first poll returns all rows. Documenting rather than fixing — common case (`-f` alone) works as expected.
 6. **No live tail of stdout (forwarder logs).** This is `tail` for the SQLite query log specifically. `journalctl -fu sentinel-dns` or piping the forwarder's stdout is the answer for the other shape.
-7. **Forwarder's internal stdout output is unchanged.** The `score`/`BLOCK`/`explain` log lines still print to the forwarder's stdout. `tail` is additive — a separate consumer of the same data.
+7. **Forwarder's internal stdout output is unchanged.** The `score`/`BLOCK`/`explain` log lines still print to the forwarder's stdout. `tail` and `explain` are additive — separate consumers of the same data.
+8. **`explain` does not score unseen domains.** Loading the classifier (~80ms cold start) for a one-shot lookup felt heavy. If a domain isn't in the log, you get a "no records" message rather than a hypothetical decision. A `--score-live` flag could be added later if there's demand.
+9. **`explain` does not surface forwarder vs cache vs blocklist mode the decision was made under.** The log row records what happened at the time. If you turned the blocklist on later, `explain` won't tell you the historical decision would change with current rules. To re-evaluate, query the domain again through the forwarder.
 
 ## What this unblocks
 
-- **`sentinel-dns explain <domain>`** (next task) reuses the same dispatcher pattern and the same SQLite reader. Should be a much smaller PR.
-- The first sentence of the README quickstart now reads cleanly: *"Run `sentinel-dns --config sentinel-dns.toml` in one shell, then `sentinel-dns tail -f` in another to watch traffic."*
-- Demo material is much easier to produce — open a tail in a terminal, query a few domains, the output is self-explanatory.
+- The first sentence of the README quickstart now reads cleanly: *"Run `sentinel-dns --config sentinel-dns.toml` in one shell, then `sentinel-dns tail -f` in another to watch traffic. Run `sentinel-dns explain <domain>` to see why a particular query was allowed or blocked."*
+- Demo material is much easier to produce — open a tail in a terminal, query a few domains, then `explain` one to walk through the decision.
+- The "every block has a real reason" promise from RESEARCH.md is now exposed end-to-end: structured in the SQLite log, prose in the forwarder's stdout, and on-demand via `explain` in the CLI.
