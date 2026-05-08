@@ -76,6 +76,7 @@ jobs:
         # tag for the runner arch.
         if: github.event_name == 'pull_request'
         run: |
+          set -euxo pipefail
           # Find the locally loaded image tag — pick the first one buildx wrote.
           IMG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
           echo "smoke-testing $IMG"
@@ -86,8 +87,16 @@ jobs:
           # Give the blocklist time to download.
           sleep 8
           docker logs sd | grep -E "listening|blocklist refreshed"
+
           # Resolve a benign domain — should succeed.
           dig @127.0.0.1 -p 5354 google.com +short +tries=1 +time=3
-          # Block test — known URLhaus entry should NXDOMAIN.
-          dig @127.0.0.1 -p 5354 1ce6-route.fixionmunici9al.lat | grep -q "status: NXDOMAIN"
+
+          # Block test — pick a real entry from the same URLhaus feed
+          # the container is using, so the test is resilient to URLhaus
+          # rotating individual entries off the feed.
+          BAD=$(curl -sS https://urlhaus.abuse.ch/downloads/hostfile/ \
+            | awk '$1 == "127.0.0.1" && $2 !~ /^[0-9.]+$/ { print $2; exit }')
+          echo "block-testing: $BAD"
+          dig @127.0.0.1 -p 5354 "$BAD" | grep -q "status: NXDOMAIN"
+
           docker stop sd
