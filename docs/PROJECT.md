@@ -18,9 +18,9 @@ Listed in priority order. Top of the list = next thing to work on.
   - [x] Load URLhaus host file at startup; refresh on a configurable interval
   - [x] Blocklist hits are checked before the classifier (the inline tier's first layer per [`ARCHITECTURE.md`](ARCHITECTURE.md))
   - [ ] Multi-feed support (StevenBlack as a second source) — deferred to a follow-up
-- [ ] Plain-language explanation generator
-  - [ ] Convert structured `HeuristicReasons` + classifier signals to a templated human string per the architecture's spec
-  - [ ] Reused by both the block log and the (future) CLI `explain` command
+- [x] Plain-language explanation generator (PR #15)
+  - [x] Convert structured `HeuristicReasons` + classifier signals to a templated human string per the architecture's spec
+  - [x] Reused by both the block log (this PR) and the (future) CLI `explain` command
 - [ ] Local SQLite query log
   - [ ] Schema for `queries` (qname, client, timestamp, decision, reasons FK) and `decisions` (qname → decision cache, persistent)
   - [ ] Retention config (default 7 days)
@@ -71,6 +71,7 @@ Listed in priority order. Top of the list = next thing to work on.
 
 - Enforcement mode — `--enforce` flag turns the inline classifier into an actual blocker. `would_block=True` queries get NXDOMAIN instead of being forwarded; verified with live URLhaus domains. Log lines distinguish `score` (allow) from `BLOCK` (block) prefixes for cleaner grepping. Cache short-circuit and argparse safety checks both verified. Writeup in [`docs/enforcement-mode.md`](enforcement-mode.md). (PR #13)
 - Static blocklist with URLhaus — `StaticBlocklist` in `sentinel_dns/blocklist.py`, fetched via `--blocklist-url`, refreshed in a background asyncio task on configurable interval (default 1h, fail-open). Wired into the inline tier as layer 1 (before the classifier per the architecture). Forwarder can now run as classifier-only, blocklist-only, or both. `Decision` extended with a `block_source` field ("blocklist"/"classifier"/None) for the upcoming explanation generator. Writeup in [`docs/static-blocklist.md`](static-blocklist.md). (PR #14)
+- Plain-language explanation generator — `explain()` in `sentinel_dns/explanation.py` converts a `Decision` into a structured `list[Reason]` and a templated human string. No LLM at query time — deterministic templates. Wired into the BLOCK log: every block produces a `signals=...` field on the `BLOCK` line plus a follow-up `explain` line with the human paragraph. The "why blocked" differentiator from RESEARCH.md is now real. Writeup in [`docs/explanations.md`](explanations.md). (PR #15)
 
 ### Phase 1 follow-ups
 

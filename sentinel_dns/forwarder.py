@@ -29,6 +29,7 @@ from sentinel_dns.classifier import (
     LexicalClassifier,
     heuristic_score,
 )
+from sentinel_dns.explanation import explain
 
 log = logging.getLogger("sentinel_dns.forwarder")
 
@@ -151,11 +152,16 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
     ) -> None:
         if not self.config.score_logging:
             return
-        prefix = "BLOCK" if (self.config.enforce and decision.would_block) else "score"
+        is_block_action = self.config.enforce and decision.would_block
+        prefix = "BLOCK" if is_block_action else "score"
         timing = f" inline_us={inline_us:.1f}" if inline_us is not None else ""
         source = f" source={decision.block_source}" if decision.block_source else ""
+
+        explanation = explain(qname, decision) if is_block_action else None
+        signals = f" signals={','.join(explanation.signal_codes)}" if explanation else ""
+
         log.info(
-            "%s qname=%s ml=%.4f heur=%.3f would_block=%s cache=%s%s%s",
+            "%s qname=%s ml=%.4f heur=%.3f would_block=%s cache=%s%s%s%s",
             prefix,
             qname,
             decision.ml_score,
@@ -164,7 +170,10 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
             cache_state,
             source,
             timing,
+            signals,
         )
+        if explanation is not None:
+            log.info("explain qname=%s — %s", qname, explanation.human)
 
     @staticmethod
     def _make_nxdomain(request: dns.message.Message) -> bytes:
