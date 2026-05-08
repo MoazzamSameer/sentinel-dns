@@ -37,9 +37,9 @@ Listed in priority order. Top of the list = next thing to work on.
   - [x] Filter by client, by decision type, by score threshold
 - [x] CLI: `sentinel-dns explain <domain>` (PR #19)
   - [x] Show the latest decision for a domain, with structured reasons + plain-English explanation
-- [ ] DoH upstream
-  - [ ] Switch `dns.asyncquery.udp` → DoH client. Configurable endpoint.
-  - [ ] Latency re-bench — DoH adds ~5–20ms vs UDP; measure on representative networks
+- [x] DoH upstream (PR #20)
+  - [x] Switch `dns.asyncquery.udp` → DoH client. Configurable endpoint.
+  - [x] Latency re-bench — measured ~36ms p50 vs UDP (higher than initially expected; shared `httpx.AsyncClient` was load-bearing — without it, +118ms p50)
 - [ ] README quickstart
   - [ ] One-page install + first-run flow for a homelab user
   - [ ] Explain config defaults, blocklist sources, where logs live
@@ -80,6 +80,7 @@ Listed in priority order. Top of the list = next thing to work on.
 - TOML config file — `Config` moved to `sentinel_dns/config.py` with `load_toml()` + `merge()` helpers. Flat schema (sections rejected). Precedence: CLI > file > defaults, detected via `argparse.SUPPRESS` so un-passed flags don't appear in the Namespace. Unknown TOML keys produce errors listing valid keys. Example file at repo root: [`sentinel-dns.example.toml`](../sentinel-dns.example.toml). Writeup in [`docs/configuration.md`](configuration.md). (PR #17)
 - CLI: `sentinel-dns tail` — `sentinel_dns/cli.py` dispatcher (default → forwarder, `tail` → tail subcommand) plus `sentinel_dns/tail_cmd.py` reading the SQLite log read-only via `mode=ro` URI form. One-shot or `-f` follow mode (polling every 0.5s); filters by `--decision`, `--client`, `--qname-contains`, `--min-ml-score`, `--block-source`. Block rows get an explanation line via the same `explain()` the forwarder uses. Writeup in [`docs/cli.md`](cli.md). (PR #18)
 - CLI: `sentinel-dns explain <domain>` — `sentinel_dns/explain_cmd.py` reuses the same read-only SQLite + `explain()` plumbing. Surfaces the most recent decision as a terse one-liner with structured reason bullets; `--verbose` adds raw scores + cache state + inline timing; `-n N` walks history to spot flapping classifications or cache transitions. Unseen domain → exit code 2 (clean error path for shell scripts). The "why blocked" promise is now exposed end-to-end. Writeup in [`docs/cli.md`](cli.md). (PR #19)
+- DoH upstream — `--upstream-doh-url` flag / `upstream_doh_url` TOML key dispatches to `dns.asyncquery.https()` instead of UDP. Single shared `httpx.AsyncClient` (HTTP/2 pinned) holds the TLS session for the forwarder's lifetime; without it, dnspython opens a fresh TLS session per query and adds +118ms p50. With it, +36ms p50 vs UDP forwarder. Bad URLs return SERVFAIL cleanly via a broader `_forward` exception catch. Adds `httpx[http2]` as a base dep. Writeup in [`docs/doh-upstream.md`](doh-upstream.md). (PR #20)
 
 ### Phase 1 follow-ups
 

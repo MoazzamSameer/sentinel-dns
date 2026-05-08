@@ -21,7 +21,9 @@ from pathlib import Path
 import dns.asyncquery
 import dns.exception
 import dns.message
+import dns.query
 import dns.rcode
+import httpx
 
 from sentinel_dns.blocklist import StaticBlocklist, URLHAUS_URL
 from sentinel_dns.cache import Decision, DecisionCache
@@ -53,12 +55,14 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
         cache: DecisionCache | None,
         blocklist: StaticBlocklist | None,
         query_log: QueryLog | None,
+        doh_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.config = config
         self.classifier = classifier
         self.cache = cache
         self.blocklist = blocklist
         self.query_log = query_log
+        self.doh_client = doh_client
         self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -225,15 +229,31 @@ class ForwardingProtocol(asyncio.DatagramProtocol):
 
     async def _forward(self, request: dns.message.Message) -> bytes:
         try:
-            response = await dns.asyncquery.udp(
-                request,
-                self.config.upstream_host,
-                port=self.config.upstream_port,
-                timeout=self.config.upstream_timeout,
-            )
+            if self.config.upstream_doh_url is not None:
+                # Pin to HTTP/2 (dnspython's default tries HTTP/3 first which
+                # needs aioquic). Pass a shared httpx client so connections
+                # stay warm — without it, dnspython opens a fresh TLS session
+                # per query and adds ~100ms p50.
+                response = await dns.asyncquery.https(
+                    request,
+                    self.config.upstream_doh_url,
+                    timeout=self.config.upstream_timeout,
+                    http_version=dns.query.HTTPVersion.HTTP_2,
+                    client=self.doh_client,
+                )
+            else:
+                response = await dns.asyncquery.udp(
+                    request,
+                    self.config.upstream_host,
+                    port=self.config.upstream_port,
+                    timeout=self.config.upstream_timeout,
+                )
             return response.to_wire()
-        except (dns.exception.Timeout, OSError) as e:
-            log.warning("upstream error: %s", e)
+        except Exception as e:
+            # Catch broadly: dns.exception.Timeout, OSError, httpx.HTTPError,
+            # httpx.ConnectError, etc. The per-query task must never crash —
+            # any failure means SERVFAIL to the client and a log line for us.
+            log.warning("upstream error (%s): %s", type(e).__name__, e)
             response = dns.message.make_response(request)
             response.set_rcode(dns.rcode.SERVFAIL)
             return response.to_wire()
@@ -249,18 +269,33 @@ async def serve(
     if query_log is not None:
         await query_log.start()
 
+    doh_client: httpx.AsyncClient | None = None
+    if config.upstream_doh_url is not None:
+        # Connection-pooling client lives for the whole forwarder lifetime.
+        # Each DoH query reuses the same TLS session.
+        doh_client = httpx.AsyncClient(
+            http2=True,
+            timeout=config.upstream_timeout,
+        )
+
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: ForwardingProtocol(config, classifier, cache, blocklist, query_log),
+        lambda: ForwardingProtocol(
+            config, classifier, cache, blocklist, query_log, doh_client
+        ),
         local_addr=(config.listen_host, config.listen_port),
     )
+    upstream_label = (
+        f"DoH {config.upstream_doh_url}"
+        if config.upstream_doh_url is not None
+        else f"UDP {config.upstream_host}:{config.upstream_port}"
+    )
     log.info(
-        "listening on %s:%d, upstream %s:%d, classifier=%s, cache=%s, blocklist=%s, "
+        "listening on %s:%d, upstream=%s, classifier=%s, cache=%s, blocklist=%s, "
         "log=%s, enforce=%s",
         config.listen_host,
         config.listen_port,
-        config.upstream_host,
-        config.upstream_port,
+        upstream_label,
         "on" if classifier is not None else "off",
         f"capacity={config.cache_capacity}" if cache is not None else "off",
         f"size={blocklist.size}" if blocklist is not None else "off",
@@ -278,6 +313,8 @@ async def serve(
         if refresh_task is not None:
             refresh_task.cancel()
         transport.close()
+        if doh_client is not None:
+            await doh_client.aclose()
         if query_log is not None:
             await query_log.stop()
 
@@ -298,6 +335,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--upstream-host", default=argparse.SUPPRESS)
     p.add_argument("--upstream-port", type=int, default=argparse.SUPPRESS)
     p.add_argument("--upstream-timeout", type=float, default=argparse.SUPPRESS)
+    p.add_argument(
+        "--upstream-doh-url", default=argparse.SUPPRESS,
+        help="DoH endpoint URL (e.g. https://cloudflare-dns.com/dns-query). "
+        "When set, overrides UDP upstream — DNS queries leave the device "
+        "wrapped in HTTPS, so the ISP can't see which domains you query.",
+    )
     p.add_argument(
         "--model-path", type=Path, default=argparse.SUPPRESS,
         help="Path to a trained classifier (.joblib). If omitted, no scoring.",
@@ -365,6 +408,10 @@ def main() -> None:
         level=args.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # httpx logs every DoH POST at INFO. We log our own per-query lines;
+    # don't double-log the upstream HTTP traffic.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     file_overrides: dict = {}
     if args.config is not None:
